@@ -20,7 +20,7 @@ config.read("config.ini")
 
 API_KEY = config["alpaca"]["API_KEY"]
 API_SECRET = config["alpaca"]["API_SECRET"]
-POLL_INTERVAL = int(config["alpaca"]["POLL_INTERVAL"])
+POLL_INTERVAL = config.get("alpaca", "POLL_INTERVAL", fallback="15Min")
 BASE_URL = "https://paper-api.alpaca.markets"
 USE_TRADING_HOURS = config.getboolean("settings", "use_trading_hours")
 if config.has_option("settings", "watch_list"):
@@ -53,7 +53,7 @@ def save_trade_history(trade_history):
         json.dump(trade_history, f, indent=4)
 
 
-def fetch_data(ticker, timeframe="1Min", limit=100):
+def fetch_data(ticker, timeframe=POLL_INTERVAL, limit=100):
     """
     Fetch historical data for a given stock ticker.
     """
@@ -239,12 +239,10 @@ def monitor_stocks(stocks_to_watch_list):
     Monitor a list of stocks and notify when a sell signal is detected.
     """
     trade_history = load_trade_history()
-    print(
-        f"Monitoring the following stocks: {stocks_to_watch_list}."
-    )
+    print(f"Monitoring the following stocks: {stocks_to_watch_list}.")
 
     while True:
-        if (USE_TRADING_HOURS and is_market_open()) or ( not USE_TRADING_HOURS):
+        if (USE_TRADING_HOURS and is_market_open()) or (not USE_TRADING_HOURS):
 
             for ticker in stocks_to_watch_list:
                 if ticker in trade_history and trade_history[ticker]["date"] == str(
@@ -257,34 +255,30 @@ def monitor_stocks(stocks_to_watch_list):
                 if data is not None and not data.empty:
                     buy_patterns, sell_patterns = analyze_candlesticks(data)
                     if sell_patterns:
-                        print(
-                            f"Sell signals detected for {ticker}: {sell_patterns}"
-                        )
+                        print(f"Sell signals detected for {ticker}: {sell_patterns}")
                         if ticker in trade_history:
                             qty = int(
                                 api.get_account().cash
                                 / api.get_last_trade(ticker).price
                             )
-                            place_sell_order(ticker, qty)
-                            trade_history[ticker] = {
-                                "date": str(datetime.now().date()),
-                                "action": "sell",
-                            }
-                            save_trade_history(trade_history)
+                            result = place_sell_order(ticker, qty)
+                            if result.get("error") is None:
+                                trade_history.append(
+                                    {"ticker": ticker, "action": "buy"}
+                                )
+                                save_trade_history(trade_history)
                     elif buy_patterns:
                         print(f"Buy signals detected for {ticker}: {buy_patterns}")
-                        place_buy_order(ticker)
-                        trade_history[ticker] = {
-                            "date": str(datetime.now().date()),
-                            "action": "buy",
-                        }
-                        save_trade_history(trade_history)
+                        result = place_buy_order(ticker)
+                        if result.get("error") is None:
+                            trade_history.append({"ticker": ticker, "action": "buy"})
+                            save_trade_history(trade_history)
                     else:
                         print(f"No signals for {ticker} at the moment.")
         else:
             print("Market is closed. Waiting for market hours...")
 
-        time.sleep(POLL_INTERVAL)
+        time.sleep(60)
 
 
 if __name__ == "__main__":
