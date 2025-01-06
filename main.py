@@ -4,9 +4,10 @@ App to scan alpaca for known stock symbols and make paper trades
 
 # standard
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 import configparser
 import json
+import math
 
 # third party
 import alpaca_trade_api as tradeapi
@@ -27,6 +28,7 @@ if config.has_option("settings", "watch_list"):
     WATCH_LIST = config["settings"]["watch_list"].strip().upper().split(",")
 else:
     WATCH_LIST = []  # Or any default value you'd like
+MAX_SPEND_PER_TRADE = config.get("settings", "max_spend_per_trade", fallback=50)
 
 
 TRADE_HISTORY_FILE = "trade_history.json"
@@ -37,6 +39,27 @@ LOCAL_TZ = pytz.timezone("America/New_York")  # Adjust to your local timezone
 # Initialize Alpaca API
 api = tradeapi.REST(API_KEY, API_SECRET, BASE_URL, api_version="v2")
 
+
+def add_trade_to_history(ticker, action, price, quantity):
+    trade_history = load_trade_history()
+
+    # Create a new trade entry
+    new_trade = {
+        "action": action,
+        "date": str(datetime.now().date()),
+        "price": price,
+        "quantity": quantity,
+    }
+
+    # If the ticker already exists in the trade history, append the new trade to the list
+    if ticker in trade_history:
+        trade_history[ticker].append(new_trade)
+    else:
+        trade_history[ticker] = [new_trade]
+
+    # Save the updated trade history back to the file
+    save_trade_history(trade_history)
+    trade_history = load_trade_history()
 
 def load_trade_history():
     """Load the trade history from file."""
@@ -51,6 +74,12 @@ def save_trade_history(trade_history):
     """Save the trade history to file."""
     with open(TRADE_HISTORY_FILE, "w", encoding="utf-8") as f:
         json.dump(trade_history, f, indent=4)
+
+
+def get_current_price(ticker):
+    bars = api.get_bars(symbol=ticker, timeframe="1min", limit=1)
+
+    return bars[-1].c
 
 
 def fetch_data(ticker, timeframe=POLL_INTERVAL, limit=100):
@@ -187,6 +216,14 @@ def is_market_open():
     return market_open <= now <= market_close
 
 
+def get_last_trade(ticker, trade_history):
+    """Get the last trade for the given ticker."""
+    if ticker in trade_history:
+        # Get the last trade (most recent entry in the list)
+        return trade_history[ticker][-1]  # Returns the most recent trade for the ticker
+    return None
+
+
 def get_active_stocks():
     """
     Fetch the list of active stocks (positions) in your Alpaca account.
@@ -221,17 +258,68 @@ def place_buy_order(stock, amount=50):
         return None
 
 
-def place_sell_order(stock, qty):
-    """Place a sell order for a stock"""
-    try:
-        api.submit_order(
-            symbol=stock, qty=qty, side="sell", type="market", time_in_force="gtc"
-        )
-        print(f"Sell order placed for {stock}!")
-        return stock
-    except Exception as e:
-        print(f"Error placing sell order: {e}")
-        return None
+def should_skip_trade(ticker, trade_history):
+    """Check if the trade has already been performed for today based on the most recent trade."""
+    if ticker in trade_history:
+        # Get the most recent trade (last entry in the list)
+        most_recent_trade = trade_history[ticker][-1]
+        trade_date = datetime.strptime(most_recent_trade["date"], "%Y-%m-%d").date()
+        return trade_date == datetime.now().date()
+    return False
+
+def analyze_stock_for_trading(ticker):
+    """Analyze the stock for buy/sell signals."""
+    data = fetch_data(ticker)
+    if data is not None and not data.empty:
+        buy_patterns, sell_patterns = analyze_candlesticks(data)
+        return buy_patterns, sell_patterns
+    return [], []
+
+
+def perform_buy_order_if_needed(ticker, buy_patterns, trade_history):
+    """Perform buy order if conditions are met."""
+    if buy_patterns:
+        print(f"Buy signals detected for {ticker}: {buy_patterns}")
+        result = place_buy_order(ticker)
+        if result.get("error") is None:
+            add_trade_to_history(ticker, "buy", price, quantity)
+
+def perform_sell_order_if_needed(ticker, sell_patterns, trade_history):
+    """Perform sell order if conditions are met."""
+    positions = api.list_positions()
+    current_position = next((p for p in positions if p.symbol == ticker), None)
+
+    if sell_patterns and current_position is not None:
+        print(f"Sell signals detected for {ticker}: {sell_patterns}")
+
+        # Check if it has been at least 15 minutes since the last sell
+        last_trade = get_last_trade(ticker, trade_history)
+
+        if last_trade:
+            last_trade_time = datetime.strptime(last_trade["date"], "%Y-%m-%d %H:%M:%S")
+            time_diff = datetime.now() - last_trade_time
+
+            if time_diff < timedelta(minutes=15):
+                print(
+                    f"Sell for {ticker} is being skipped. Last trade was {time_diff} ago."
+                )
+                return
+
+        try:
+            # Calculate 20% of the owned quantity, rounded up
+            qty = math.ceil(int(current_position.qty) * 0.20)
+            price = get_current_price(
+                ticker
+            )  # Assuming this function gets the current price
+            api.submit_order(
+                symbol=ticker, qty=qty, side="sell", type="market", time_in_force="day"
+            )
+            print(f"Sell order placed for {ticker}!")
+
+            add_trade_to_history(ticker, "sell", price, qty)
+        except Exception as e:
+            print(f"Error placing sell order: {e}")
+            return None
 
 
 def monitor_stocks(stocks_to_watch_list):
@@ -243,50 +331,40 @@ def monitor_stocks(stocks_to_watch_list):
 
     while True:
         if (USE_TRADING_HOURS and is_market_open()) or (not USE_TRADING_HOURS):
-
             for ticker in stocks_to_watch_list:
-                if ticker in trade_history and trade_history[ticker]["date"] == str(
-                    datetime.now().date()
-                ):
+                if should_skip_trade(ticker, trade_history):
                     print(f"Trade already performed for {ticker} today. Skipping.")
                     continue
 
-                data = fetch_data(ticker)
-                if data is not None and not data.empty:
-                    buy_patterns, sell_patterns = analyze_candlesticks(data)
-                    if sell_patterns:
-                        print(f"Sell signals detected for {ticker}: {sell_patterns}")
-                        if ticker in trade_history:
-                            qty = int(
-                                api.get_account().cash
-                                / api.get_last_trade(ticker).price
-                            )
-                            result = place_sell_order(ticker, qty)
-                            if result.get("error") is None:
-                                trade_history.append(
-                                    {"ticker": ticker, "action": "buy"}
-                                )
-                                save_trade_history(trade_history)
-                    elif buy_patterns:
-                        print(f"Buy signals detected for {ticker}: {buy_patterns}")
-                        result = place_buy_order(ticker)
-                        if result.get("error") is None:
-                            trade_history.append({"ticker": ticker, "action": "buy"})
-                            save_trade_history(trade_history)
-                    else:
-                        print(f"No signals for {ticker} at the moment.")
+                buy_patterns, sell_patterns = analyze_stock_for_trading(ticker)
+                perform_sell_order_if_needed(ticker, sell_patterns, trade_history)
+                perform_buy_order_if_needed(ticker, buy_patterns, trade_history)
         else:
             print("Market is closed. Waiting for market hours...")
 
         time.sleep(60)
 
 
-if __name__ == "__main__":
-    # Option 1: Use active stocks from Alpaca account
+def load_stock_list():
+    """Load the list of active stocks and combine with WATCH_LIST."""
     active_stocks = get_active_stocks()
-    all_stocks_to_watch = list(set(WATCH_LIST + active_stocks))
 
-    # If no stocks to monitor, print an error
+    # Remove any active stocks that are already in WATCH_LIST
+    combined_stocks = list(set(WATCH_LIST + active_stocks))
+
+    # Update the WATCH_LIST in config.ini
+    config.set("settings", "watch_list", ",".join(combined_stocks))
+    with open("config.ini", "w", encoding="utf-8") as configfile:
+        config.write(configfile)
+
+    config.read("config.ini")
+
+    return combined_stocks
+
+
+if __name__ == "__main__":
+    all_stocks_to_watch = load_stock_list()
+
     if not all_stocks_to_watch:
         print("No stocks to monitor. Exiting script.")
     else:
