@@ -1,0 +1,7 @@
+alpaca_trade_api
+numpy
+pandas
+pytz
+datetime
+configparser
+
