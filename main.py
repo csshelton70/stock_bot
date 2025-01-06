@@ -20,8 +20,14 @@ config.read("config.ini")
 
 API_KEY = config["alpaca"]["API_KEY"]
 API_SECRET = config["alpaca"]["API_SECRET"]
-POLL_INTERVAL = int(config["alpaca"]["POLL_INTERVAL"])  # Poll interval in seconds
-BASE_URL = "https://paper-api.alpaca.markets"  # Change to live URL for live trading
+POLL_INTERVAL = int(config["alpaca"]["POLL_INTERVAL"])
+BASE_URL = "https://paper-api.alpaca.markets"
+USE_TRADING_HOURS = config.getboolean("settings", "use_trading_hours")
+if config.has_option("settings", "watch_list"):
+    WATCH_LIST = config["settings"]["watch_list"].strip().upper().split(",")
+else:
+    WATCH_LIST = []  # Or any default value you'd like
+
 
 TRADE_HISTORY_FILE = "trade_history.json"
 
@@ -234,11 +240,12 @@ def monitor_stocks(stocks_to_watch_list):
     """
     trade_history = load_trade_history()
     print(
-        f"Monitoring the following stocks: {stocks_to_watch_list} during market hours..."
+        f"Monitoring the following stocks: {stocks_to_watch_list}."
     )
 
     while True:
-        if is_market_open():
+        if (USE_TRADING_HOURS and is_market_open()) or ( not USE_TRADING_HOURS):
+
             for ticker in stocks_to_watch_list:
                 if ticker in trade_history and trade_history[ticker]["date"] == str(
                     datetime.now().date()
@@ -250,7 +257,9 @@ def monitor_stocks(stocks_to_watch_list):
                 if data is not None and not data.empty:
                     buy_patterns, sell_patterns = analyze_candlesticks(data)
                     if sell_patterns:
-                        print(f"Sell signals detected for {ticker}: {sell_patterns}")
+                        print(
+                            f"Sell signals detected for {ticker}: {sell_patterns}"
+                        )
                         if ticker in trade_history:
                             qty = int(
                                 api.get_account().cash
@@ -275,29 +284,13 @@ def monitor_stocks(stocks_to_watch_list):
         else:
             print("Market is closed. Waiting for market hours...")
 
-    time.sleep(POLL_INTERVAL)
+        time.sleep(POLL_INTERVAL)
 
 
 if __name__ == "__main__":
     # Option 1: Use active stocks from Alpaca account
     active_stocks = get_active_stocks()
-
-    # Option 2: Allow user to specify a comma-separated list of stocks
-    stock_input = (
-        input(
-            "Enter the comma-separated list of stocks to watch (e.g., AAPL, TSLA) or leave empty to monitor active stocks: "
-        )
-        .strip()
-        .upper()
-    )
-
-    if stock_input:
-        stocks_to_watch = stock_input.split(",")
-    else:
-        stocks_to_watch = active_stocks
-
-    # Combine user input stocks and active stocks
-    all_stocks_to_watch = list(set(stocks_to_watch + active_stocks))
+    all_stocks_to_watch = list(set(WATCH_LIST + active_stocks))
 
     # If no stocks to monitor, print an error
     if not all_stocks_to_watch:
