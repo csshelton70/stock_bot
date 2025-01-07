@@ -64,7 +64,7 @@ def check_pdt_violation() -> bool:
     account_url = f"{base_url}/account"
 
     # Fetch account details
-    response = requests.get(account_url, headers=headers)
+    response = requests.get(account_url, headers=headers, timeout=60)
     if response.status_code != 200:
         print(f"Error: {response.status_code}, {response.text}")
         return False
@@ -132,8 +132,8 @@ def load_trade_history():
     """
     Loads the trade history from the trade history JSON file.
 
-    This function attempts to read the trade history from a JSON file. If the 
-    file is found, it parses the contents and returns the trade history as 
+    This function attempts to read the trade history from a JSON file. If the
+    file is found, it parses the contents and returns the trade history as
     a dictionary. If the file does not exist, an empty dictionary is returned.
 
     Returns:
@@ -159,7 +159,7 @@ def save_trade_history(trade_history: str) -> None:
     readability. If the file does not exist, it will be created.
 
     Args:
-        trade_history (str): A JSON-formatted string representing the trade 
+        trade_history (str): A JSON-formatted string representing the trade
                               history data.
 
     Example:
@@ -186,7 +186,7 @@ def get_current_price(ticker: str) -> float:
                given stock ticker.
 
     Raises:
-        Exception: If there is an error retrieving the data or the data 
+        Exception: If there is an error retrieving the data or the data
                    is not available.
 
     Example:
@@ -197,7 +197,7 @@ def get_current_price(ticker: str) -> float:
     return bars[-1].c
 
 
-def is_last_trade_older_than_15_minutes(ticker:str, trade_history:dict) -> bool:
+def is_last_trade_older_than_15_minutes(ticker: str, trade_history: dict) -> bool:
     """
     Check if the last trade for a given ticker is more than 15 minutes old.
 
@@ -223,10 +223,45 @@ def is_last_trade_older_than_15_minutes(ticker:str, trade_history:dict) -> bool:
     return True
 
 
-def fetch_data(ticker, timeframe=POLL_INTERVAL, limit=100):
+def fetch_data(
+    ticker: str, timeframe: str = POLL_INTERVAL, limit: int = 240
+) -> pd.DataFrame:
     """
-    Fetch historical data for a given stock ticker.
+    Fetch historical market data for a given stock ticker.
+
+    This function retrieves historical bar data for the specified stock ticker using 
+    the Alpaca API's `get_bars` method. The data includes timestamp, open, high, low, 
+    close, and volume information for each bar. The timeframe and number of bars to 
+    fetch can be customized.
+
+    Parameters:
+        ticker (str): The stock ticker symbol to fetch data for (e.g., "AAPL").
+        timeframe (str): The granularity of the bars to fetch (e.g., "1Min", "1Day").
+                         Defaults to the value of `POLL_INTERVAL`.
+        limit (int): The maximum number of bars to retrieve. Defaults to 240.
+
+    Returns:
+        pd.DataFrame: A DataFrame containing the historical data with the following columns:
+            - `timestamp`: Datetime of the bar.
+            - `open`: Opening price of the bar.
+            - `high`: Highest price during the bar period.
+            - `low`: Lowest price during the bar period.
+            - `close`: Closing price of the bar.
+            - `volume`: Trading volume during the bar period.
+
+        If an error occurs, the function prints an error message and returns `None`.
+
+    Raises:
+        Exception: If an error occurs during the API call or DataFrame creation.
+
+    Example:
+        >>> fetch_data("AAPL", "1Day", 100)
+        timestamp   open    high    low     close   volume
+        2023-01-01  150.0   152.0   149.0   151.0   1000000
+        2023-01-02  151.0   153.0   150.0   152.0   1200000
+        ...
     """
+
     try:
         # Fetch historical bars using `get_bars`
         bars = api.get_bars(symbol=ticker, timeframe=timeframe, limit=limit)
@@ -247,8 +282,44 @@ def fetch_data(ticker, timeframe=POLL_INTERVAL, limit=100):
         return None
 
 
-def detect_bullish_engulfing(df):
-    """Bullish Engulfing pattern"""
+def detect_bullish_engulfing(df: pd.DataFrame) -> pd.Series:
+    """
+    Detect Bullish Engulfing candlestick patterns in a DataFrame.
+
+    A Bullish Engulfing pattern occurs when a bullish candlestick (close > open) 
+    fully engulfs the previous bearish candlestick (close < open), indicating a 
+    potential reversal or upward momentum in the market.
+
+    Parameters:
+        df (pd.DataFrame): A DataFrame containing the candlestick data with the following columns:
+            - `open`: The opening price of each candlestick.
+            - `close`: The closing price of each candlestick.
+
+    Returns:
+        pd.Series: A boolean Series indicating the presence of a Bullish Engulfing pattern. 
+                   `True` for rows where the pattern is detected, and `False` otherwise.
+
+    Conditions for Bullish Engulfing:
+        1. The previous candlestick (`close.shift(1) < open.shift(1)`) is bearish.
+        2. The current candlestick (`close > open`) is bullish.
+        3. The current candlestick's body fully engulfs the previous candlestick's body:
+            - `close > open.shift(1)`
+            - `open < close.shift(1)`
+
+    Example:
+        >>> import pandas as pd
+        >>> data = {
+        ...     "open": [100, 95, 97, 96],
+        ...     "close": [95, 97, 96, 99]
+        ... }
+        >>> df = pd.DataFrame(data)
+        >>> detect_bullish_engulfing(df)
+        0    False
+        1    False
+        2     True
+        3    False
+        dtype: bool
+    """
     return (
         (df["close"].shift(1) < df["open"].shift(1))
         & (df["open"] < df["close"])
@@ -378,27 +449,6 @@ def get_active_stocks():
         return []
 
 
-def place_buy_order(stock, amount=50):
-    """Place a buy order for a stock"""
-    try:
-        # Fetch the latest price using get_bars (1 minute time frame for real-time data)
-        bars = api.get_bars(stock, "minute", limit=1)
-        last_price = bars[-1].c  # The close price of the last bar
-
-        # Calculate the number of shares to buy based on the $50 buy amount
-        qty = int(amount / last_price)
-
-        # Place the buy order
-        api.submit_order(
-            symbol=stock, qty=qty, side="buy", type="market", time_in_force="gtc"
-        )
-        print(f"Buy order placed for {stock}!")
-        return stock
-    except Exception as e:
-        print(f"Error placing buy order: {e}")
-        return None
-
-
 def analyze_stock_for_trading(ticker):
     """Analyze the stock for buy/sell signals."""
     data = fetch_data(ticker)
@@ -485,12 +535,13 @@ def monitor_stocks(stocks_to_watch_list):
         for ticker in stocks_to_watch_list:
             buy_patterns, sell_patterns = analyze_stock_for_trading(ticker)
             if (not buy_patterns) and (not sell_patterns):
-                print(f"No buy or sell signals detected for {ticker}.")
+                # print(f"No buy or sell signals detected for {ticker}.")
                 continue
             perform_sell_order_if_needed(ticker, sell_patterns, trade_history)
             perform_buy_order_if_needed(ticker, buy_patterns, trade_history)
 
         time.sleep(60)
+        print("-------------------------------------------------------------------")
 
 
 def load_stock_list():
