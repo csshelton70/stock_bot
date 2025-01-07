@@ -29,9 +29,8 @@ if config.has_option("settings", "watch_list"):
 else:
     WATCH_LIST = []  # Or any default value you'd like
 MAX_SPEND_PER_TRADE = config.get("settings", "max_spend_per_trade", fallback=50)
-
-
 TRADE_HISTORY_FILE = "trade_history.json"
+tradeable_info = {}
 
 # Define your local timezone (e.g., New York Time - Eastern Time)
 LOCAL_TZ = pytz.timezone("America/New_York")  # Adjust to your local timezone
@@ -60,6 +59,7 @@ def add_trade_to_history(ticker, action, price, quantity):
     # Save the updated trade history back to the file
     save_trade_history(trade_history)
     trade_history = load_trade_history()
+
 
 def load_trade_history():
     """Load the trade history from file."""
@@ -267,6 +267,7 @@ def should_skip_trade(ticker, trade_history):
         return trade_date == datetime.now().date()
     return False
 
+
 def analyze_stock_for_trading(ticker):
     """Analyze the stock for buy/sell signals."""
     data = fetch_data(ticker)
@@ -284,42 +285,53 @@ def perform_buy_order_if_needed(ticker, buy_patterns, trade_history):
         if result.get("error") is None:
             add_trade_to_history(ticker, "buy", price, quantity)
 
+
 def perform_sell_order_if_needed(ticker, sell_patterns, trade_history):
     """Perform sell order if conditions are met."""
     positions = api.list_positions()
     current_position = next((p for p in positions if p.symbol == ticker), None)
 
     if sell_patterns and current_position is not None:
-        print(f"Sell signals detected for {ticker}: {sell_patterns}")
+        if tradeable_info.get(ticker) is True or is_market_open():
+            print(f"Sell signals detected for {ticker}: {sell_patterns}")
 
-        # Check if it has been at least 15 minutes since the last sell
-        last_trade = get_last_trade(ticker, trade_history)
+            # Check if it has been at least 15 minutes since the last sell
+            last_trade = get_last_trade(ticker, trade_history)
 
-        if last_trade:
-            last_trade_time = datetime.strptime(last_trade["date"], "%Y-%m-%d %H:%M:%S")
-            time_diff = datetime.now() - last_trade_time
-
-            if time_diff < timedelta(minutes=15):
-                print(
-                    f"Sell for {ticker} is being skipped. Last trade was {time_diff} ago."
+            if last_trade:
+                last_trade_time = datetime.strptime(
+                    last_trade["date"], "%Y-%m-%d %H:%M:%S"
                 )
-                return
+                time_diff = datetime.now() - last_trade_time
 
-        try:
-            # Calculate 20% of the owned quantity, rounded up
-            qty = math.ceil(int(current_position.qty) * 0.20)
-            price = get_current_price(
-                ticker
-            )  # Assuming this function gets the current price
-            api.submit_order(
-                symbol=ticker, qty=qty, side="sell", type="market", time_in_force="day"
-            )
-            print(f"Sell order placed for {ticker}!")
+                if time_diff < timedelta(minutes=15):
+                    print(
+                        f"Sell for {ticker} is being skipped. Last trade was {time_diff} ago."
+                    )
+                    return
 
-            add_trade_to_history(ticker, "sell", price, qty)
-        except Exception as e:
-            print(f"Error placing sell order: {e}")
-            return None
+            try:
+                # Calculate 20% of the owned quantity, rounded up
+                qty = math.ceil(int(current_position.qty) * 0.20)
+                price = get_current_price(
+                    ticker
+                )  # Assuming this function gets the current price
+                api.submit_order(
+                    symbol=ticker,
+                    qty=qty,
+                    side="sell",
+                    type="market",
+                    time_in_force="day",
+                    extended_hours=True,
+                )
+                print(f"Sell order placed for {ticker}!")
+
+                add_trade_to_history(ticker, "sell", price, qty)
+            except Exception as e:
+                print(f"Error placing sell order: {e}")
+                return None
+        else:
+            print(f"{ticker} is not tradable after hours. Skipping sell order.")
 
 
 def monitor_stocks(stocks_to_watch_list):
@@ -330,17 +342,14 @@ def monitor_stocks(stocks_to_watch_list):
     print(f"Monitoring the following stocks: {stocks_to_watch_list}.")
 
     while True:
-        if (USE_TRADING_HOURS and is_market_open()) or (not USE_TRADING_HOURS):
-            for ticker in stocks_to_watch_list:
-                if should_skip_trade(ticker, trade_history):
-                    print(f"Trade already performed for {ticker} today. Skipping.")
-                    continue
+        for ticker in stocks_to_watch_list:
+            if should_skip_trade(ticker, trade_history):
+                print(f"Trade already performed for {ticker} today. Skipping.")
+                continue
 
-                buy_patterns, sell_patterns = analyze_stock_for_trading(ticker)
-                perform_sell_order_if_needed(ticker, sell_patterns, trade_history)
-                perform_buy_order_if_needed(ticker, buy_patterns, trade_history)
-        else:
-            print("Market is closed. Waiting for market hours...")
+            buy_patterns, sell_patterns = analyze_stock_for_trading(ticker)
+            perform_sell_order_if_needed(ticker, sell_patterns, trade_history)
+            perform_buy_order_if_needed(ticker, buy_patterns, trade_history)
 
         time.sleep(60)
 
@@ -362,8 +371,37 @@ def load_stock_list():
     return combined_stocks
 
 
+def check_after_hours_tradability(stock_list) -> dict:
+    """
+    Check if stocks can be traded after hours.
+
+    Args:
+        stock_list (list): List of stock symbols to check.
+
+    Returns:
+        dict: Dictionary with stock symbols as keys and their after-hours tradability status as values.
+    """
+    tradability_status = {}
+
+    for stock in stock_list:
+        try:
+            # Fetch asset details using the Alpaca API
+            asset = api.get_asset(stock)
+            # Check if the asset is tradable and eligible for extended hours
+            if asset.tradable and asset.marginable:
+                tradability_status[stock] = True
+            else:
+                tradability_status[stock] = False
+        except Exception as e:
+            print(f"Error checking tradability for {stock}: {e}")
+            tradability_status[stock] = "Error"
+
+    return tradability_status
+
+
 if __name__ == "__main__":
     all_stocks_to_watch = load_stock_list()
+    tradable_info = check_after_hours_tradability(all_stocks_to_watch)
 
     if not all_stocks_to_watch:
         print("No stocks to monitor. Exiting script.")
