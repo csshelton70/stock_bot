@@ -50,3 +50,9 @@ ENV/
 # OS
 .DS_Store
 Thumbs.db
+
+
+#project
+crypto_trading.db*
+*.old
+

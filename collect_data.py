@@ -26,18 +26,18 @@ from typing import List, Tuple
 # Add project root to Python path
 # sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from datetime import datetime, timedelta
+
+from sqlalchemy import text
+
 from utils import Config
 from utils import setup_logging
 from utils import RetryConfig
-
 from collectors import CryptoCollector
 from collectors import AccountCollector
 from collectors import HoldingsCollector
 from collectors import HistoricalCollector
 from database import DatabaseSession, DatabaseManager
 from database import Historical
-
-from sqlalchemy import text
 
 
 logger = logging.getLogger("robinhood_crypto_app.main")
