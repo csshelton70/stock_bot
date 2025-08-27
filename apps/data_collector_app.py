@@ -8,10 +8,30 @@ from collectors.crypto_collector import CryptoCollector
 from collectors.account_collector import AccountCollector
 from collectors.holdings_collector import HoldingsCollector
 from collectors.historical_collector import HistoricalCollector
+import sys
 
 
 class DataCollectorApp(BaseApplication):
-    """Data collection app with dynamic historical collector creation"""
+    """Data collection app with safe Unicode handling"""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Define platform-safe status indicators
+        self.status_indicators = self._get_status_indicators()
+
+    def _get_status_indicators(self) -> dict:
+        """Get platform-appropriate status indicators"""
+        if sys.platform.startswith("win"):
+            # Windows-safe ASCII indicators
+            return {
+                "success": "[OK]",
+                "failure": "[FAIL]",
+                "warning": "[WARN]",
+                "info": "[INFO]",
+            }
+        else:
+            # Unix systems can handle Unicode
+            return {"success": "✅", "failure": "❌", "warning": "⚠️", "info": "ℹ️"}
 
     def get_app_name(self) -> str:
         return "Robinhood Crypto Data Collector"
@@ -82,7 +102,7 @@ class DataCollectorApp(BaseApplication):
         )
 
     def _run_main(self) -> int:
-        """Main data collection logic with enhanced reporting"""
+        """Main data collection logic with safe Unicode logging"""
         success_count = 0
         failure_count = 0
         failed_collectors = []
@@ -109,16 +129,25 @@ class DataCollectorApp(BaseApplication):
                 failed_collectors.append(collector_name)
                 collector_results[collector_name] = f"ERROR: {str(e)[:50]}..."
 
-        # Enhanced summary logging
-        self.context.logger.info("=== Collection Summary ===")
+        # Enhanced summary logging with safe indicators
+        self.context.logger.info("=" * 50)
+        self.context.logger.info("Collection Summary")
+        self.context.logger.info("=" * 50)
         self.context.logger.info(f"Total collectors: {len(self.collectors)}")
         self.context.logger.info(f"Successful: {success_count}")
         self.context.logger.info(f"Failed: {failure_count}")
+        self.context.logger.info("-" * 50)
 
-        # Log individual collector results
+        # Log individual collector results with safe indicators
         for collector_name, result in collector_results.items():
-            status_emoji = "✅" if result == "SUCCESS" else "❌"
-            self.context.logger.info(f"  {status_emoji} {collector_name}: {result}")
+            if result == "SUCCESS":
+                status_indicator = self.status_indicators["success"]
+            elif result == "FAILED":
+                status_indicator = self.status_indicators["failure"]
+            else:
+                status_indicator = self.status_indicators["failure"]
+
+            self.context.logger.info(f"  {status_indicator} {collector_name}: {result}")
 
         if failed_collectors:
             self.context.logger.warning(
@@ -128,13 +157,22 @@ class DataCollectorApp(BaseApplication):
         # Cleanup old data for each interval
         self._cleanup_old_data_for_all_intervals()
 
-        # Return appropriate exit code
+        # Return appropriate exit code with summary
         if failure_count == 0:
-            return 0  # All successful
+            self.context.logger.info(
+                f"{self.status_indicators['success']} All collections completed successfully!"
+            )
+            return 0
         elif success_count > 0:
-            return 1  # Partial success
+            self.context.logger.warning(
+                f"{self.status_indicators['warning']} Partial success: {success_count}/{len(self.collectors)} completed"
+            )
+            return 1
         else:
-            return 2  # All failed
+            self.context.logger.error(
+                f"{self.status_indicators['failure']} All collections failed!"
+            )
+            return 2
 
     def _cleanup_old_data_for_all_intervals(self) -> None:
         """Cleanup old historical data for all configured intervals"""

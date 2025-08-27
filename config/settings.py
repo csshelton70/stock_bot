@@ -73,6 +73,7 @@ class TradingConfig:
 @dataclass
 class HistoricalIntervalConfig:
     """Configuration for a single historical data interval"""
+
     interval_minutes: int
     days_back: int = 60
     buffer_days: int = 1
@@ -83,30 +84,32 @@ class HistoricalIntervalConfig:
 @dataclass
 class HistoricalConfig:
     """Enhanced historical data collection configuration supporting multiple intervals"""
-    
+
     # Default intervals with their specific configurations
-    intervals: List[HistoricalIntervalConfig] = field(default_factory=lambda: [
-        HistoricalIntervalConfig(interval_minutes=15, days_back=60, buffer_days=1),
-        HistoricalIntervalConfig(interval_minutes=60, days_back=60, buffer_days=1)
-    ])
-    
+    intervals: List[HistoricalIntervalConfig] = field(
+        default_factory=lambda: [
+            HistoricalIntervalConfig(interval_minutes=15, days_back=60, buffer_days=1),
+            HistoricalIntervalConfig(interval_minutes=60, days_back=60, buffer_days=1),
+        ]
+    )
+
     # Global settings that apply to all intervals
     coinbase_base_url: str = "https://api.exchange.coinbase.com"
     request_delay: float = 0.5
     max_request_delay: float = 5.0
     max_retries: int = 3
-    
+
     # Backward compatibility properties
     @property
     def days_back(self) -> int:
         """Return days_back from first interval for backward compatibility"""
         return self.intervals[0].days_back if self.intervals else 60
-    
+
     @property
     def interval_minutes(self) -> int:
         """Return interval_minutes from first interval for backward compatibility"""
         return self.intervals[0].interval_minutes if self.intervals else 15
-    
+
     @property
     def buffer_days(self) -> int:
         """Return buffer_days from first interval for backward compatibility"""
@@ -119,7 +122,7 @@ class HistoricalConfig:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "HistoricalConfig":
         """Create HistoricalConfig from dictionary with backward compatibility"""
-        
+
         # Handle legacy single interval configuration
         if "interval_minutes" in data:
             # Convert legacy format to new format
@@ -127,16 +130,18 @@ class HistoricalConfig:
                 interval_minutes=data.get("interval_minutes", 15),
                 days_back=data.get("days_back", 60),
                 buffer_days=data.get("buffer_days", 1),
-                cleanup_days=data.get("cleanup_days", 90)
+                cleanup_days=data.get("cleanup_days", 90),
             )
             return cls(
                 intervals=[legacy_interval],
-                coinbase_base_url=data.get("coinbase_base_url", "https://api.exchange.coinbase.com"),
+                coinbase_base_url=data.get(
+                    "coinbase_base_url", "https://api.exchange.coinbase.com"
+                ),
                 request_delay=data.get("request_delay", 0.5),
                 max_request_delay=data.get("max_request_delay", 5.0),
-                max_retries=data.get("max_retries", 3)
+                max_retries=data.get("max_retries", 3),
             )
-        
+
         # Handle new multi-interval format
         intervals = []
         if "intervals" in data:
@@ -145,16 +150,22 @@ class HistoricalConfig:
         else:
             # Default intervals if none specified
             intervals = [
-                HistoricalIntervalConfig(interval_minutes=15, days_back=60, buffer_days=1),
-                HistoricalIntervalConfig(interval_minutes=60, days_back=60, buffer_days=1)
+                HistoricalIntervalConfig(
+                    interval_minutes=15, days_back=60, buffer_days=1
+                ),
+                HistoricalIntervalConfig(
+                    interval_minutes=60, days_back=60, buffer_days=1
+                ),
             ]
-        
+
         return cls(
             intervals=intervals,
-            coinbase_base_url=data.get("coinbase_base_url", "https://api.exchange.coinbase.com"),
+            coinbase_base_url=data.get(
+                "coinbase_base_url", "https://api.exchange.coinbase.com"
+            ),
             request_delay=data.get("request_delay", 0.5),
             max_request_delay=data.get("max_request_delay", 5.0),
-            max_retries=data.get("max_retries", 3)
+            max_retries=data.get("max_retries", 3),
         )
 
 
@@ -244,21 +255,21 @@ class AppConfig:
     @classmethod
     def _from_dict(cls, data: Dict[str, Any]) -> "AppConfig":
         """Create AppConfig from dictionary with enhanced historical config support"""
-        
+
         # Handle legacy config structure
         legacy_config = {}
-        
+
         # Map legacy historical_data section
         if "historical_data" in data:
             legacy_config["historical"] = data["historical_data"]
-        
+
         # Merge with new structure
         merged_data = {**data, **legacy_config}
-        
+
         # Create historical config with proper handling
         historical_data = merged_data.get("historical", {})
         historical_config = HistoricalConfig.from_dict(historical_data)
-        
+
         return cls(
             database=DatabaseConfig(**merged_data.get("database", {})),
             logging=LoggingConfig(**merged_data.get("logging", {})),
