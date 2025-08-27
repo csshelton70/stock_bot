@@ -1,166 +1,120 @@
+# collectors/crypto_collector.py
 """
-Crypto pairs and prices data collector for Robinhood Crypto Trading App
+Refactored crypto collector using repository pattern
 """
-
-# pylint:disable=broad-exception-caught,logging-fstring-interpolation,missing-module-docstring
-
-
-import logging
 from typing import List, Dict, Any
-from robinhood import create_client
-from utils import retry_with_backoff
-from database import DatabaseOperations
-from database import DatabaseSession
+from datetime import datetime
 
-logger = logging.getLogger("robinhood_crypto_app.collectors.crypto")
+from .base_collector import BaseCollector
+from database.connections import DatabaseManager
+from database.models import Crypto
+from data.repositories.crypto_repository import CryptoRepository
+from utils.retry import RetryConfig
+from robinhood import RobinhoodCryptoAPI
 
 
-class CryptoCollector:
-    """Collects cryptocurrency pairs and current prices"""
+class CryptoCollector(BaseCollector):
+    """Fixed crypto collector using repository pattern"""
 
-    def __init__(self, retry_config, api_key: str, private_key_base64: str):
-        self.retry_config = retry_config
-        self.api_key = api_key
-        self.private_key_base64 = private_key_base64
+    def __init__(
+        self,
+        db_manager: DatabaseManager,
+        retry_config: RetryConfig,
+        crypto_repo: CryptoRepository,
+        api_client: RobinhoodCryptoAPI,
+    ):
+        super().__init__(db_manager, retry_config)
+        self.crypto_repo = crypto_repo
+        self.api_client = api_client
 
-    @retry_with_backoff(max_attempts=3, backoff_factor=2.0, initial_delay=1.0)
-    def _get_crypto_pairs_and_prices(self) -> List[Dict[str, Any]]:
-        """Get cryptocurrency trading pairs and current prices from Robinhood"""
+    def get_collector_name(self) -> str:
+        return "Cryptocurrency Market Data"
+
+    def collect_and_store(self) -> bool:
+        """Collect crypto data using repository pattern"""
         try:
-            logger.debug("Fetching crypto currency pairs and prices from Robinhood")
+            # Fetch all trading pairs from API
+            trading_pairs_response = (
+                self.api_client.get_trading_pairs()
+            )  # Get all pairs
+            trading_pairs = trading_pairs_response.get("results", [])
 
-            with create_client(
-                api_key=self.api_key, private_key_base64=self.private_key_base64
-            ) as client:
-                # Get trading pairs
-                trading_pairs = client.get_all_trading_pairs()
-                logger.info(f"Retrieved {len(trading_pairs)} trading pairs")
+            if not self.validate_data(trading_pairs):
+                return False
 
-                # Get symbols for price quotes
-                symbols = [
-                    pair.get("symbol") for pair in trading_pairs if pair.get("symbol")
-                ]
+            # Extract symbols for price lookup
+            symbols = [
+                pair.get("symbol") for pair in trading_pairs if pair.get("symbol")
+            ]
 
-                # Get current prices
-                prices = client.get_best_bid_ask(symbols)
-                logger.info(
-                    f"Retrieved prices for {len(prices.get('results', []))} symbols"
-                )
+            if not symbols:
+                self.logger.error("No valid symbols found in trading pairs")
+                return False
 
-                return self._process_crypto_data(trading_pairs, prices)
+            # Get prices for all symbols in one call (pass as list, not individual calls)
+            prices_response = self.api_client.get_best_bid_ask(
+                symbols
+            )  # Fixed: pass list directly
+            prices_data = prices_response.get("results", [])
 
-        except Exception as e:
-            logger.error(f"Error fetching crypto pairs and prices: {e}")
-            raise
+            # Create lookup dict for prices
+            price_lookup = {}
+            for price_data in prices_data:
+                symbol = price_data.get("symbol")
+                if symbol:
+                    price_lookup[symbol] = price_data
 
-    def _process_crypto_data(
-        self, pairs: List[Dict], prices_response: Dict
-    ) -> List[Dict[str, Any]]:
-        """Process and combine crypto pairs and prices data"""
-        processed_data = []
-
-        # Create a lookup for prices by symbol
-        prices_lookup = {}
-        for price_data in prices_response.get("results", []):
-            symbol = price_data.get("symbol")
-            if symbol:
-                prices_lookup[symbol] = price_data
-
-        for pair in pairs:
-            try:
+            # Process trading pairs data with prices
+            crypto_data = []
+            for pair in trading_pairs:
                 symbol = pair.get("symbol", "")
                 if not symbol:
                     continue
 
                 # Get price data for this symbol
-                price_data = prices_lookup.get(symbol, {})
+                price_data = price_lookup.get(symbol, {})
 
-                # Extract bid and ask prices
-                bid_price = None
-                ask_price = None
-
-                if price_data:
-                    bid_price = (
-                        float(price_data.get("bid_inclusive_of_sell_spread", 0))
-                        if price_data.get("bid_inclusive_of_sell_spread")
-                        else None
-                    )
-                    ask_price = (
-                        float(price_data.get("ask_inclusive_of_buy_spread", 0))
-                        if price_data.get("ask_inclusive_of_buy_spread")
-                        else None
-                    )
-
-                # Calculate mid price
-                mid_price = None
-                if bid_price is not None and ask_price is not None:
-                    mid_price = (bid_price + ask_price) / 2
-
-                # Extract order limits
-                min_order = None
-                max_order = None
-
-                if "min_order_size" in pair:
-                    min_order = (
-                        float(pair["min_order_size"])
-                        if pair["min_order_size"]
-                        else None
-                    )
-
-                if "max_order_size" in pair:
-                    max_order = (
-                        float(pair["max_order_size"])
-                        if pair["max_order_size"]
-                        else None
-                    )
-
-                crypto_data = {
+                crypto_record = {
                     "symbol": symbol,
-                    "minimum_order": min_order,
-                    "maximum_order": max_order,
-                    "bid": bid_price,
-                    "mid": mid_price,
-                    "ask": ask_price,
+                    "minimum_order": float(pair.get("min_order_size", 0)),
+                    "maximum_order": (
+                        float(pair.get("max_order_size", 0))
+                        if pair.get("max_order_size")
+                        else None
+                    ),
+                    "monitored": False,  # Default to not monitored
                 }
 
-                processed_data.append(crypto_data)
-                logger.debug(f"Processed crypto data for {symbol}")
+                # Add price data if available
+                if price_data:
+                    crypto_record.update(
+                        {
+                            "bid": float(
+                                price_data.get("bid_inclusive_of_sell_spread", 0)
+                            ),
+                            "ask": float(
+                                price_data.get("ask_inclusive_of_buy_spread", 0)
+                            ),
+                            "mid": float(price_data.get("price", 0)),
+                        }
+                    )
 
-            except Exception as e:
-                logger.warning(
-                    f"Error processing crypto pair {pair.get('symbol', 'unknown')}: {e}"
-                )
-                continue
+                crypto_data.append(crypto_record)
 
-        logger.info(f"Processed {len(processed_data)} crypto records")
-        return processed_data
+            # Store data using repository
+            stored_count = self.crypto_repo.upsert_crypto_data(crypto_data)
 
-    def collect_and_store(self, db_manager) -> bool:
-        """
-        Collect crypto data and store in database
-
-        Args:
-            db_manager: Database manager instance
-
-        Returns:
-            True if successful, False otherwise
-        """
-        try:
-            logger.info("Starting crypto data collection")
-
-            # Get crypto pairs and prices
-            crypto_data = self._get_crypto_pairs_and_prices()
-            if not crypto_data:
-                logger.warning("No crypto data collected")
-                return False
-
-            # Store in database
-            with DatabaseSession(db_manager) as session:
-                count = DatabaseOperations.upsert_crypto_data(session, crypto_data)
-                logger.info(f"Successfully stored {count} crypto records")
+            # Log statistics
+            self.log_collection_stats(
+                {
+                    "Trading pairs processed": len(crypto_data),
+                    "Records stored/updated": stored_count,
+                    "Symbols with prices": len(price_lookup),
+                }
+            )
 
             return True
 
         except Exception as e:
-            logger.error(f"Failed to collect and store crypto data: {e}")
+            self.logger.error(f"Error in crypto collection: {e}")
             return False

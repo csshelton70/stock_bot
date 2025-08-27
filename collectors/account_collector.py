@@ -1,98 +1,88 @@
+# collectors/account_collector.py
 """
-Account information data collector for Robinhood Crypto Trading App
+Refactored account collector using repository pattern
 """
 
-# pylint:disable=broad-exception-caught,logging-fstring-interpolation,missing-module-docstring
+from typing import Dict, Any
+from datetime import datetime
+
+from .base_collector import BaseCollector
+from database.connections import DatabaseManager
+from database.models import Account
+from utils.retry import RetryConfig
+from robinhood import RobinhoodCryptoAPI
 
 
-import logging
-from typing import Dict, Any, Optional
-from robinhood import create_client
-from utils.retry import retry_with_backoff
-from database import DatabaseOperations
-from database import DatabaseSession
+class AccountCollector(BaseCollector):
+    """Refactored account collector using repository pattern"""
 
-logger = logging.getLogger("robinhood_crypto_app.collectors.account")
+    def __init__(
+        self,
+        db_manager: DatabaseManager,
+        retry_config: RetryConfig,
+        api_client: RobinhoodCryptoAPI,
+    ):
+        super().__init__(db_manager, retry_config)
+        self.api_client = api_client
 
+    def get_collector_name(self) -> str:
+        return "Account Information"
 
-class AccountCollector:
-    """Collects account information"""
-
-    def __init__(self, retry_config, api_key: str, private_key_base64: str):
-        self.retry_config = retry_config
-        self.api_key = api_key
-        self.private_key_base64 = private_key_base64
-
-    @retry_with_backoff(max_attempts=3, backoff_factor=2.0, initial_delay=1.0)
-    def _get_account_info(self) -> Optional[Dict[str, Any]]:
-        """Get account information from Robinhood"""
+    def collect_and_store(self) -> bool:
+        """Collect account data using repository pattern"""
         try:
-            logger.debug("Fetching account information from Robinhood")
-
-            with create_client(
-                api_key=self.api_key, private_key_base64=self.private_key_base64
-            ) as client:
-                # Get account information
-                account = client.get_account()
-
-                if not account:
-                    logger.warning("No account information returned from Robinhood")
-                    return None
-
-                account_data = {
-                    "account_number": account.get("account_number", ""),
-                    "status": account.get("status", "unknown"),
-                    "buying_power": (
-                        float(account.get("buying_power", 0))
-                        if account.get("buying_power")
-                        else 0.0
-                    ),
-                    "currency": account.get("buying_power_currency", "USD"),
-                }
-
-                logger.info("Successfully retrieved account information")
-                return account_data
-
-        except Exception as e:
-            logger.error(f"Error fetching account information: {e}")
-            raise
-
-    def collect_and_store(self, db_manager) -> bool:
-        """
-        Collect account data and store in database
-
-        Args:
-            db_manager: Database manager instance
-
-        Returns:
-            True if successful, False otherwise
-        """
-        try:
-            logger.info("Starting account data collection")
-
             # Get account information
-            account_data = self._get_account_info()
-            if not account_data:
-                logger.warning("No account data collected")
+            account_data = self.api_client.get_account()
+            if not self.validate_data(account_data):
                 return False
 
-            # Validate required fields
-            if not account_data.get("account_number"):
-                logger.error("Account number is missing from account data")
+            # Process account data
+            processed_account = {
+                "account_number": account_data.get("account_number", ""),
+                "status": account_data.get("status", ""),
+                "buying_power": float(account_data.get("buying_power", 0.0)),
+                "currency": account_data.get("buying_power_currency", "USD"),
+            }
+
+            if not processed_account["account_number"]:
+                self.logger.error("Account number is missing from API response")
                 return False
 
-            # Store in database
-            with DatabaseSession(db_manager) as session:
-                success = DatabaseOperations.upsert_account_data(session, account_data)
-                if success:
-                    logger.info(
-                        f"Successfully stored account data for account {account_data['account_number']}"
-                    )
+            # Store using repository pattern
+            from database import DatabaseSession
+
+            with DatabaseSession(self.db_manager) as db_session:
+                # Check if account exists
+                existing_account = (
+                    db_session.query(Account)
+                    .filter_by(account_number=processed_account["account_number"])
+                    .first()
+                )
+
+                if existing_account:
+                    # Update existing account
+                    for key, value in processed_account.items():
+                        if hasattr(existing_account, key):
+                            setattr(existing_account, key, value)
+                    existing_account.updated_at = datetime.utcnow()
+                    action = "updated"
                 else:
-                    logger.error("Failed to store account data")
+                    # Create new account
+                    new_account = Account(**processed_account)
+                    db_session.add(new_account)
+                    action = "created"
 
-                return success
+            # Log statistics
+            self.log_collection_stats(
+                {
+                    "Account": f"{action} - {processed_account['account_number']}",
+                    "Status": processed_account["status"],
+                    "Buying Power": f"${processed_account['buying_power']:,.2f}",
+                }
+            )
+
+            return True
 
         except Exception as e:
-            logger.error(f"Failed to collect and store account data: {e}")
+            self.logger.error(f"Error in account collection: {e}")
             return False

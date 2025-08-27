@@ -2,6 +2,7 @@
 
 # Database package for Robinhood Crypto Trading App
 
+
 from .account_collector import AccountCollector
 from .crypto_collector import CryptoCollector
 from .historical_collector import HistoricalCollector

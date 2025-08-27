@@ -1,52 +1,56 @@
-# ./utils/logger.py
+# utils/logger.py (Enhanced logging setup)
 """
-Logging setup for Robinhood Crypto Trading App
+Enhanced logging configuration with rotation and structured formatting
 """
-
-# pylint:disable=broad-exception-caught,logging-fstring-interpolation,missing-module-docstring,missing-function-docstring
 
 import logging
+import logging.handlers
 import os
-from logging.handlers import RotatingFileHandler
-from utils.config import Config
+from typing import Dict, Any
+from pathlib import Path
+
+from config.settings import LoggingConfig
 
 
-def setup_logging(config: Config) -> logging.Logger:
-    """Setup logging with both console and file handlers"""
+def setup_logging(config: LoggingConfig) -> logging.Logger:
+    """
+    Setup enhanced logging with file rotation and structured formatting
+
+    Args:
+        config: Logging configuration
+
+    Returns:
+        Configured logger instance
+    """
 
     # Create logs directory if it doesn't exist
-    log_dir = os.path.dirname(config.log_file_path)
-    if log_dir and not os.path.exists(log_dir):
-        os.makedirs(log_dir)
+    log_file_path = Path(config.file_path)
+    log_file_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Create logger
-    logger = logging.getLogger("robinhood_crypto_app")
-    logger.setLevel(logging.DEBUG)  # Capture everything, handlers will filter
+    # Configure root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(getattr(logging, config.level.upper(), logging.INFO))
 
-    # Clear any existing handlers
-    logger.handlers.clear()
+    # Clear existing handlers
+    root_logger.handlers.clear()
 
-    # Create formatters
-    detailed_formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s"
-    )
-    simple_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+    # Create formatter
+    formatter = logging.Formatter(config.format)
 
-    # File handler - logs everything (DEBUG and above)
-    file_handler = RotatingFileHandler(
-        config.log_file_path,
-        maxBytes=config.max_file_size_mb * 1024 * 1024,  # Convert MB to bytes
-        backupCount=config.backup_count,
-    )
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(detailed_formatter)
-    logger.addHandler(file_handler)
-
-    # Console handler - logs less detail (INFO and above by default)
+    # Console handler
     console_handler = logging.StreamHandler()
-    console_level = getattr(logging, config.log_level.upper(), logging.INFO)
-    console_handler.setLevel(console_level)
-    console_handler.setFormatter(simple_formatter)
-    logger.addHandler(console_handler)
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(formatter)
+    root_logger.addHandler(console_handler)
 
-    return logger
+    # File handler with rotation
+    file_handler = logging.handlers.RotatingFileHandler(
+        config.file_path, maxBytes=config.max_file_size, backupCount=config.backup_count
+    )
+    file_handler.setLevel(getattr(logging, config.level.upper(), logging.DEBUG))
+    file_handler.setFormatter(formatter)
+    root_logger.addHandler(file_handler)
+
+    # Return specific logger for the application
+    app_logger = logging.getLogger("robinhood_crypto_app")
+    return app_logger

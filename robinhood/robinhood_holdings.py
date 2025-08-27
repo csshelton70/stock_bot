@@ -125,7 +125,9 @@ class HoldingsClient(RobinhoodBaseClient):
         """
         all_holdings = self.get_all_holdings_paginated()
         return [
-            holding for holding in all_holdings if float(holding.get("quantity", 0)) > 0
+            holding
+            for holding in all_holdings
+            if float(holding.get("total_quantity", 0)) > 0
         ]
 
     def get_holding_by_asset(self, asset_code: str) -> Optional[Dict[str, Any]]:
@@ -161,7 +163,9 @@ class HoldingsClient(RobinhoodBaseClient):
         """
         all_holdings = self.get_all_holdings_paginated()
         active_holdings = [
-            holding for holding in all_holdings if float(holding.get("quantity", 0)) > 0
+            holding
+            for holding in all_holdings
+            if float(holding.get("total_quantity", 0)) > 0
         ]
 
         return {
@@ -188,7 +192,7 @@ class HoldingsClient(RobinhoodBaseClient):
         holding = self.get_holding_by_asset(asset_code)
         if holding is None:
             return 0.0
-        return float(holding.get("quantity", 0))
+        return float(holding.get("total_quantity", 0))
 
     def has_asset(self, asset_code: str, minimum_quantity: float = 0.0) -> bool:
         """
@@ -225,7 +229,7 @@ class HoldingsClient(RobinhoodBaseClient):
         """
         active_holdings = self.get_active_holdings()
         return {
-            holding["asset_code"]: float(holding["quantity"])
+            holding["asset_code"]: float(holding["total_quantity"])
             for holding in active_holdings
         }
 

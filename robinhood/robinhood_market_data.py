@@ -29,7 +29,7 @@ class MarketDataClient(RobinhoodBaseClient):
     """
 
     def get_trading_pairs(
-        self, symbols: Optional[Sequence[str]] = None
+        self, symbols: Optional[Union[str, Sequence[str]]] = None
     ) -> Dict[str, Any]:
         """
         Get available trading pairs information.
@@ -39,7 +39,8 @@ class MarketDataClient(RobinhoodBaseClient):
         pair-specific configuration.
 
         Args:
-            symbols: Optional sequence of trading pair symbols (e.g., ["BTC-USD", "ETH-USD"]).
+            symbols: Optional symbol or sequence of trading pair symbols.
+                    Can be a single string "BTC-USD" or list ["BTC-USD", "ETH-USD"].
                     If None, returns all available trading pairs.
 
         Returns:
@@ -53,20 +54,31 @@ class MarketDataClient(RobinhoodBaseClient):
 
         Example:
             >>> client = MarketDataClient()
+            >>> # Single symbol (now works correctly)
+            >>> pairs = client.get_trading_pairs("BTC-USD")
+            >>> # Multiple symbols
             >>> pairs = client.get_trading_pairs(["BTC-USD", "ETH-USD"])
             >>> for pair in pairs['results']:
             ...     print(f"{pair['symbol']}: Min={pair['min_order_size']}")
         """
         query_params = ""
         if symbols:
-            symbol_params = [f"symbol={symbol.upper()}" for symbol in symbols]
+            # FIX: Handle both string and list inputs correctly
+            if isinstance(symbols, str):
+                # Single symbol passed as string
+                symbol_list = [symbols]
+            else:
+                # Multiple symbols passed as list/sequence
+                symbol_list = list(symbols)
+
+            symbol_params = [f"symbol={symbol.upper()}" for symbol in symbol_list]
             query_params = "?" + "&".join(symbol_params)
 
         path = f"/api/v1/crypto/trading/trading_pairs/{query_params}"
         return self.make_request("GET", path)
 
     def get_best_bid_ask(
-        self, symbols: Optional[Sequence[str]] = None
+        self, symbols: Optional[Union[str, Sequence[str]]] = None
     ) -> Dict[str, Any]:
         """
         Get best bid and ask prices for trading pairs.
@@ -76,8 +88,9 @@ class MarketDataClient(RobinhoodBaseClient):
         immediate execution.
 
         Args:
-            symbols: Optional sequence of trading pair symbols. If None, returns
-                    prices for all supported symbols.
+            symbols: Optional symbol or sequence of trading pair symbols.
+                    Can be a single string "BTC-USD" or list ["BTC-USD", "ETH-USD"].
+                    If None, returns prices for all supported symbols.
 
         Returns:
             Dict[str, Any]: Best bid/ask prices containing:
@@ -88,14 +101,24 @@ class MarketDataClient(RobinhoodBaseClient):
 
         Example:
             >>> client = MarketDataClient()
-            >>> prices = client.get_best_bid_ask(["BTC-USD"])
+            >>> # Single symbol (now works correctly)
+            >>> prices = client.get_best_bid_ask("BTC-USD")
+            >>> # Multiple symbols
+            >>> prices = client.get_best_bid_ask(["BTC-USD", "ETH-USD"])
             >>> btc_price = prices['results'][0]
             >>> print(f"BTC Bid: ${btc_price['bid_price']}")
-            >>> print(f"BTC Ask: ${btc_price['ask_price']}")
         """
         query_params = ""
         if symbols:
-            symbol_params = [f"symbol={symbol.upper()}" for symbol in symbols]
+            # FIX: Handle both string and list inputs correctly
+            if isinstance(symbols, str):
+                # Single symbol passed as string
+                symbol_list = [symbols]
+            else:
+                # Multiple symbols passed as list/sequence
+                symbol_list = list(symbols)
+
+            symbol_params = [f"symbol={symbol.upper()}" for symbol in symbol_list]
             query_params = "?" + "&".join(symbol_params)
 
         path = f"/api/v1/crypto/marketdata/best_bid_ask/{query_params}"

@@ -1,171 +1,158 @@
+# collectors/holdings_collector.py
 """
-Holdings data collector for Robinhood Crypto Trading App
+Refactored holdings collector using repository pattern
 """
-
-import logging
 from typing import List, Dict, Any
-from robinhood import create_client
-from utils.retry import retry_with_backoff
-from database import DatabaseOperations
+from datetime import datetime
+
+from .base_collector import BaseCollector
+from database.connections import DatabaseManager
+from database.models import Holdings, Account
+from data.repositories.crypto_repository import CryptoRepository
+from utils.retry import RetryConfig
+from robinhood import RobinhoodCryptoAPI
 from database import DatabaseSession
 
-logger = logging.getLogger("robinhood_crypto_app.collectors.holdings")
 
+class HoldingsCollector(BaseCollector):
+    """Fixed holdings collector with proper session management"""
 
-class HoldingsCollector:
-    """Collects portfolio holdings"""
+    def __init__(
+        self,
+        db_manager: DatabaseManager,
+        retry_config: RetryConfig,
+        api_client: RobinhoodCryptoAPI,
+        crypto_repo: CryptoRepository,
+    ):
+        super().__init__(db_manager, retry_config)
+        self.api_client = api_client
+        self.crypto_repo = crypto_repo
 
-    def __init__(self, retry_config, api_key: str, private_key_base64: str):
-        self.retry_config = retry_config
-        self.api_key = api_key
-        self.private_key_base64 = private_key_base64
+    def get_collector_name(self) -> str:
+        return "Portfolio Holdings"
 
-    @retry_with_backoff(max_attempts=3, backoff_factor=2.0, initial_delay=1.0)
-    def _get_crypto_holdings(self) -> List[Dict[str, Any]]:
-        """Get crypto holdings from Robinhood using your API"""
+    def collect_and_store(self) -> bool:
+        """Collect holdings data with fixed session management"""
         try:
-            logger.debug("Fetching crypto holdings from Robinhood")
+            # Get holdings data
+            holdings_data = self.api_client.get_all_holdings_paginated()
+            if not self.validate_data(holdings_data):
+                self.logger.info("No holdings data found")
+                holdings_data = []
 
-            with create_client(
-                api_key=self.api_key, private_key_base64=self.private_key_base64
-            ) as client:
-                # Get all holdings using your Robinhood API
-                holdings = client.get_all_holdings_paginated()
+            # Get account currency for symbol formatting
+            account_currency = self._get_account_currency()
 
-                if not holdings:
-                    logger.info("No crypto holdings found")
-                    return []
+            # Get all symbols that will need price lookups
+            symbols_needed = set()
+            for holding in holdings_data:
+                quantity = float(holding.get("total_quantity", 0))
+                if quantity > 0:
+                    asset_code = holding.get("asset_code", "")
+                    if asset_code:
+                        symbol = f"{asset_code}-{account_currency}"
+                        symbols_needed.add(symbol)
 
-                logger.info(f"Retrieved {len(holdings)} crypto holdings from Robinhood")
-                return holdings
+            # Get all prices in one bulk query to avoid session issues
+            price_lookup = self.crypto_repo.get_prices_bulk(list(symbols_needed))
 
-        except Exception as e:
-            logger.error(f"Error fetching crypto holdings: {e}")
-            raise
+            # Process holdings data
+            processed_holdings = []
+            for holding in holdings_data:
+                quantity = float(holding.get("total_quantity", 0))
+                if quantity <= 0:
+                    continue  # Skip zero holdings
 
-    def _process_holdings_data(
-        self, holdings: List[Dict], db_session
-    ) -> List[Dict[str, Any]]:
-        """Process holdings data and calculate values"""
-        processed_holdings = []
-
-        # Get account currency for symbol formatting
-        account_currency = DatabaseOperations.get_account_currency(db_session)
-
-        for holding in holdings:
-            try:
-                # Extract basic holding data from your Robinhood API response
                 asset_code = holding.get("asset_code", "")
                 if not asset_code:
                     continue
 
-                # Format symbol as currency pair (e.g., BTC -> BTC-USD)
+                # Format symbol
                 symbol = f"{asset_code}-{account_currency}"
 
-                # Get quantities from your API response structure
-                total_quantity = float(holding.get("total_quantity", 0))
+                # Determine price using fallback logic (FIXED)
+                price = self._resolve_price_fixed(holding, symbol, price_lookup)
 
-                # Your API might have different field names, adjust as needed
-                available_quantity = float(
-                    holding.get("quantity_available_for_trading", 0)
-                )
-                if available_quantity == 0:
-                    # If not available, try other common field names
-                    available_quantity = float(
-                        holding.get("quantity_available_for_trading", 0)
-                    )
-                    if available_quantity == 0:
-                        available_quantity = (
-                            total_quantity  # Default to total if not specified
-                        )
-
-                # Skip holdings with zero quantity
-                if total_quantity <= 0:
-                    continue
-
-                # Try to get price from the holding data first
-                price = None
-
-                # Check various possible price fields from your API
-                if "price" in holding and holding["price"]:
-                    try:
-                        price = float(holding["price"])
-                    except (ValueError, TypeError):
-                        pass
-
-                if price is None and "cost_basis" in holding and holding["cost_basis"]:
-                    try:
-                        price = float(holding["cost_basis"])
-                    except (ValueError, TypeError):
-                        pass
-
-                if (
-                    price is None
-                    and "average_cost" in holding
-                    and holding["average_cost"]
-                ):
-                    try:
-                        price = float(holding["average_cost"])
-                    except (ValueError, TypeError):
-                        pass
-
-                # If no price from holding, get current market price from crypto table
-                if price is None:
-                    price = DatabaseOperations.get_crypto_price(db_session, symbol)
-
-                # Calculate value
-                value = None
-                if price is not None and total_quantity > 0:
-                    value = total_quantity * price
-
-                holding_data = {
+                holding_record = {
                     "symbol": symbol,
-                    "total_quantity": total_quantity,
-                    "quantity_available_for_trading": available_quantity,
+                    "total_quantity": quantity,
+                    "quantity_available_for_trading": float(
+                        holding.get("quantity_available", quantity)
+                    ),
                     "price": price,
-                    "value": value,
+                    "value": quantity * price if price else None,
                 }
 
-                processed_holdings.append(holding_data)
-                logger.debug(
-                    f"Processed holding for {symbol}: {total_quantity} @ {price}"
-                )
+                processed_holdings.append(holding_record)
 
-            except Exception as e:
-                logger.warning(
-                    f"Error processing holding {holding.get('asset_code', 'unknown')}: {e}"
-                )
-                continue
+            # Store using complete replacement strategy
+            with DatabaseSession(self.db_manager) as db_session:
+                # Delete existing holdings
+                deleted_count = db_session.query(Holdings).delete()
 
-        logger.info(f"Processed {len(processed_holdings)} holdings")
-        return processed_holdings
+                # Insert new holdings
+                if processed_holdings:
+                    holdings_objects = [Holdings(**data) for data in processed_holdings]
+                    db_session.add_all(holdings_objects)
 
-    def collect_and_store(self, db_manager) -> bool:
-        """
-        Collect holdings data and store in database
+            # Log statistics
+            total_value = sum(
+                h.get("value", 0) for h in processed_holdings if h.get("value")
+            )
+            self.log_collection_stats(
+                {
+                    "Holdings processed": len(processed_holdings),
+                    "Holdings stored": len(processed_holdings),
+                    "Total portfolio value": (
+                        f"${total_value:,.2f}" if total_value else "N/A"
+                    ),
+                }
+            )
 
-        Args:
-            db_manager: Database manager instance
-
-        Returns:
-            True if successful, False otherwise
-        """
-        try:
-            logger.info("Starting holdings data collection")
-
-            # Get crypto holdings using your Robinhood API
-            holdings = self._get_crypto_holdings()
-
-            # Process holdings data within a database session
-            with DatabaseSession(db_manager) as session:
-                holdings_data = self._process_holdings_data(holdings, session)
-
-                # Store in database (replace all existing holdings)
-                count = DatabaseOperations.replace_holdings_data(session, holdings_data)
-                logger.info(f"Successfully stored {count} holdings records")
-
-                return True
+            return True
 
         except Exception as e:
-            logger.error(f"Failed to collect and store holdings data: {e}")
+            self.logger.error(f"Error in holdings collection: {e}")
             return False
+
+    def _get_account_currency(self) -> str:
+        """Get account currency from database"""
+        try:
+            with DatabaseSession(self.db_manager) as db_session:
+                account = db_session.query(Account).first()
+                return account.currency if account else "USD"
+        except Exception:
+            return "USD"  # Default fallback
+
+    def _resolve_price_fixed(
+        self, holding: Dict[str, Any], symbol: str, price_lookup: Dict[str, float]
+    ) -> float:
+        """Resolve price using fallback logic - FIXED VERSION"""
+        # Priority 1: Direct API price
+        if "price" in holding:
+            try:
+                return float(holding["price"])
+            except (ValueError, TypeError):
+                pass
+
+        # Priority 2: Cost basis
+        if "cost_basis" in holding:
+            try:
+                return float(holding["cost_basis"])
+            except (ValueError, TypeError):
+                pass
+
+        # Priority 3: Average cost
+        if "average_cost" in holding:
+            try:
+                return float(holding["average_cost"])
+            except (ValueError, TypeError):
+                pass
+
+        # Priority 4: Current market price from price lookup (FIXED)
+        if symbol in price_lookup:
+            return price_lookup[symbol]
+
+        # Fallback to 0.0 if no price available
+        self.logger.warning(f"No price available for {symbol}, using 0.0")
+        return 0.0

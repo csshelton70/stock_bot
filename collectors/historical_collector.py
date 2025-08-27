@@ -1,540 +1,354 @@
+# collectors/historical_collector.py
 """
-Historical data collector for Robinhood Crypto Trading App using Coinbase API
+Refactored Historical Collector using the new base collector architecture
+Collects historical OHLCV candlestick data from Coinbase API
 """
 
-# pylint:disable=broad-exception-caught,logging-fstring-interpolation,missing-module-docstring
-
-
-import logging
-import requests
 import time
-from typing import List, Dict, Any, Optional
+import requests
+from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, timedelta
-from utils import retry_with_backoff
-from database import DatabaseOperations
+import logging
+
+from .base_collector import BaseCollector
+from database.connections import DatabaseManager
+from database.models import Historical, Crypto
+from data.repositories.historical_repository import HistoricalRepository
+from data.repositories.crypto_repository import CryptoRepository
+from utils.retry import RetryConfig
 from database import DatabaseSession
-from database import Holdings
-
-logger = logging.getLogger("robinhood_crypto_app.collectors.historical")
 
 
-class HistoricalCollector:
-    """Collects historical price data from Coinbase API"""
+class HistoricalCollector(BaseCollector):
+    """
+    Refactored historical collector using repository pattern
+    Collects OHLCV data from Coinbase Exchange API
+    """
 
     def __init__(
         self,
-        retry_config,
+        db_manager: DatabaseManager,
+        retry_config: RetryConfig,
+        historical_repo: HistoricalRepository,
+        crypto_repo: CryptoRepository,
         days_back: int = 60,
         interval_minutes: int = 15,
         buffer_days: int = 1,
     ):
-        self.retry_config = retry_config
+        super().__init__(db_manager, retry_config)
+        self.historical_repo = historical_repo
+        self.crypto_repo = crypto_repo
         self.days_back = days_back
         self.interval_minutes = interval_minutes
         self.buffer_days = buffer_days
-        self.base_url = "https://api.exchange.coinbase.com"
-        self.request_delay = 0.5  # Delay between requests to avoid rate limiting
+        self.request_delay = 0.5  # Base delay between API requests
+        self.max_request_delay = 5.0
 
-    def _get_monitored_symbols(self, db_session) -> List[str]:
-        """Get list of symbols that are marked as monitored"""
+        # Coinbase API endpoint
+        self.coinbase_base_url = "https://api.exchange.coinbase.com"
+
+    def get_collector_name(self) -> str:
+        return f"Historical Price Data ({self.interval_minutes}min intervals)"
+
+    def collect_and_store(self) -> bool:
+        """Main collection logic using repository pattern"""
         try:
-            from database.models import Crypto
+            # Get monitored symbols
+            monitored_symbols = self._get_monitored_symbols()
 
-            monitored_cryptos = (
-                db_session.query(Crypto).filter(Crypto.monitored == True).all()
+            if not monitored_symbols:
+                self.logger.warning("No monitored symbols found")
+                return True  # Not an error, just nothing to collect
+
+            self.logger.info(
+                f"Collecting historical data for {len(monitored_symbols)} symbols"
             )
-            symbols = [crypto.symbol for crypto in monitored_cryptos]
-            logger.info(f"Found {len(symbols)} monitored symbols: {symbols}")
-            return symbols
+
+            collection_stats = {
+                "symbols_processed": 0,
+                "records_inserted": 0,
+                "symbols_with_errors": 0,
+                "api_requests_made": 0,
+            }
+
+            # Process each monitored symbol
+            for symbol in monitored_symbols:
+                try:
+                    records_added = self._collect_symbol_data(symbol)
+                    collection_stats["symbols_processed"] += 1
+                    collection_stats["records_inserted"] += records_added
+
+                    self.logger.info(f"Collected {records_added} records for {symbol}")
+
+                    # Rate limiting delay
+                    time.sleep(self.request_delay)
+
+                except Exception as e:
+                    self.logger.error(f"Error collecting data for {symbol}: {e}")
+                    collection_stats["symbols_with_errors"] += 1
+                    continue
+
+            # Log collection statistics
+            self.log_collection_stats(collection_stats)
+
+            return collection_stats["symbols_with_errors"] == 0
+
         except Exception as e:
-            logger.error(f"Error getting monitored symbols: {e}")
+            self.logger.error(f"Historical collection failed: {e}")
+            return False
+
+    def _get_monitored_symbols(self) -> List[str]:
+        """Get list of monitored symbols from crypto repository"""
+        try:
+            return self.crypto_repo.get_monitored_symbols()
+        except Exception as e:
+            self.logger.error(f"Error getting monitored symbols: {e}")
             return []
 
-    def _convert_symbol_to_coinbase_format(self, symbol: str) -> str:
-        """Convert Robinhood symbol to Coinbase format"""
-        # Robinhood uses BTC-USD, Coinbase uses BTC-USD (same format)
-        # But we need to ensure it's properly formatted
-        if "-" in symbol:
-            return symbol.upper()
-        else:
-            # If somehow we get just the asset code, append USD
-            return f"{symbol.upper()}-USD"
+    def _collect_symbol_data(self, symbol: str) -> int:
+        """Collect historical data for a single symbol"""
+        try:
+            # Check if we have existing data
+            latest_timestamp = self.historical_repo.get_latest_timestamp(
+                symbol, self.interval_minutes
+            )
 
-    def _convert_interval_to_coinbase_granularity(self) -> int:
-        """Convert minute interval to Coinbase granularity (seconds)"""
-        # Coinbase granularities: 60, 300, 900, 3600, 21600, 86400
-        # (1min, 5min, 15min, 1hour, 6hour, 1day)
-        if self.interval_minutes <= 1:
-            return 60  # 1 minute
-        elif self.interval_minutes <= 5:
+            if latest_timestamp is None:
+                # No existing data - collect initial dataset
+                return self._collect_initial_data(symbol)
+            else:
+                # Incremental update from latest data
+                return self._collect_incremental_data(symbol, latest_timestamp)
+
+        except Exception as e:
+            self.logger.error(f"Error collecting data for {symbol}: {e}")
+            raise
+
+    def _collect_initial_data(self, symbol: str) -> int:
+        """Collect initial historical data day by day"""
+        try:
+            end_date = datetime.utcnow()
+            start_date = end_date - timedelta(days=self.days_back)
+
+            total_records = 0
+            current_date = start_date
+
+            self.logger.info(
+                f"Collecting initial data for {symbol} from {start_date.date()} to {end_date.date()}"
+            )
+
+            while current_date < end_date:
+                try:
+                    day_end = min(current_date + timedelta(days=1), end_date)
+
+                    # Get data for this day
+                    day_data = self._fetch_coinbase_data(symbol, current_date, day_end)
+
+                    if day_data:
+                        # Store data using repository
+                        inserted = self._store_historical_data(symbol, day_data)
+                        total_records += inserted
+
+                        self.logger.debug(
+                            f"{symbol}: {current_date.date()} - {inserted} records"
+                        )
+
+                    # Rate limiting
+                    time.sleep(self.request_delay)
+                    current_date = day_end
+
+                except Exception as e:
+                    self.logger.warning(
+                        f"Error collecting {symbol} data for {current_date.date()}: {e}"
+                    )
+                    current_date += timedelta(days=1)
+                    continue
+
+            return total_records
+
+        except Exception as e:
+            self.logger.error(f"Initial data collection failed for {symbol}: {e}")
+            raise
+
+    def _collect_incremental_data(self, symbol: str, latest_timestamp: datetime) -> int:
+        """Collect incremental data from the latest timestamp"""
+        try:
+            # Start from buffer days before latest to ensure no gaps
+            start_time = latest_timestamp - timedelta(days=self.buffer_days)
+            end_time = datetime.utcnow()
+
+            gap_days = (end_time - start_time).days
+
+            if gap_days <= 7:
+                # Small gap - single request
+                data = self._fetch_coinbase_data(symbol, start_time, end_time)
+                return self._store_historical_data(symbol, data) if data else 0
+            else:
+                # Large gap - day by day
+                return self._collect_gap_data_day_by_day(symbol, start_time, end_time)
+
+        except Exception as e:
+            self.logger.error(f"Incremental data collection failed for {symbol}: {e}")
+            raise
+
+    def _collect_gap_data_day_by_day(
+        self, symbol: str, start_time: datetime, end_time: datetime
+    ) -> int:
+        """Collect data day by day for large gaps"""
+        total_records = 0
+        current_time = start_time
+
+        self.logger.info(
+            f"Collecting gap data for {symbol} from {start_time.date()} to {end_time.date()}"
+        )
+
+        while current_time < end_time:
+            try:
+                day_end = min(current_time + timedelta(days=1), end_time)
+
+                data = self._fetch_coinbase_data(symbol, current_time, day_end)
+                if data:
+                    inserted = self._store_historical_data(symbol, data)
+                    total_records += inserted
+
+                time.sleep(self.request_delay)
+                current_time = day_end
+
+            except Exception as e:
+                self.logger.warning(
+                    f"Error collecting gap data for {symbol} on {current_time.date()}: {e}"
+                )
+                current_time += timedelta(days=1)
+                continue
+
+        return total_records
+
+    def _fetch_coinbase_data(
+        self, symbol: str, start_time: datetime, end_time: datetime
+    ) -> List[Dict[str, Any]]:
+        """Fetch historical data from Coinbase API"""
+        try:
+            # Convert interval to Coinbase granularity (seconds)
+            granularity = self._get_coinbase_granularity()
+
+            # Format timestamps for Coinbase API
+            start_iso = start_time.isoformat()
+            end_iso = end_time.isoformat()
+
+            # Coinbase API endpoint
+            url = f"{self.coinbase_base_url}/products/{symbol}/candles"
+            params = {"start": start_iso, "end": end_iso, "granularity": granularity}
+
+            self.logger.debug(
+                f"Fetching {symbol} data: {start_time.date()} to {end_time.date()}"
+            )
+
+            response = requests.get(url, params=params, timeout=30)
+
+            if response.status_code == 429:
+                # Rate limited - increase delay
+                self.request_delay = min(self.request_delay * 2, self.max_request_delay)
+                self.logger.warning(
+                    f"Rate limited, increasing delay to {self.request_delay}s"
+                )
+                time.sleep(self.request_delay)
+                # Retry once
+                response = requests.get(url, params=params, timeout=30)
+
+            response.raise_for_status()
+            candles = response.json()
+
+            if not candles:
+                self.logger.debug(f"No data returned for {symbol}")
+                return []
+
+            # Convert Coinbase format to our format
+            processed_data = []
+            for candle in candles:
+                # Coinbase format: [timestamp, low, high, open, close, volume]
+                timestamp, low, high, open_price, close, volume = candle
+
+                processed_data.append(
+                    {
+                        "symbol": symbol,
+                        "timestamp": datetime.fromtimestamp(timestamp),
+                        "interval_minutes": self.interval_minutes,
+                        "open": float(open_price),
+                        "high": float(high),
+                        "low": float(low),
+                        "close": float(close),
+                        "volume": float(volume) if volume else 0.0,
+                    }
+                )
+
+            # Sort by timestamp (oldest first)
+            processed_data.sort(key=lambda x: x["timestamp"])
+
+            return processed_data
+
+        except requests.exceptions.RequestException as e:
+            self.logger.error(f"API request failed for {symbol}: {e}")
+            raise
+        except Exception as e:
+            self.logger.error(f"Data processing failed for {symbol}: {e}")
+            raise
+
+    def _get_coinbase_granularity(self) -> int:
+        """Convert interval minutes to Coinbase granularity (seconds)"""
+        # Coinbase supported granularities
+        if self.interval_minutes <= 5:
             return 300  # 5 minutes
         elif self.interval_minutes <= 15:
             return 900  # 15 minutes
         elif self.interval_minutes <= 60:
             return 3600  # 1 hour
-        elif self.interval_minutes <= 360:
-            return 21600  # 6 hours
         else:
             return 86400  # 1 day
 
-    def _format_datetime_for_coinbase(self, dt: datetime) -> str:
-        """Format datetime for Coinbase API (ISO 8601)"""
-        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    def _store_historical_data(self, symbol: str, data: List[Dict[str, Any]]) -> int:
+        """Store historical data using repository"""
+        if not data:
+            return 0
 
-    @retry_with_backoff(max_attempts=3, backoff_factor=2.0, initial_delay=1.0)
-    def _get_single_day_data_from_coinbase(
-        self, symbol: str, start: datetime, end: datetime
-    ) -> Optional[List[List]]:
-        """Get one day of historical data from Coinbase API"""
         try:
-            coinbase_symbol = self._convert_symbol_to_coinbase_format(symbol)
-            granularity = self._convert_interval_to_coinbase_granularity()
+            # Use repository to bulk insert
+            inserted_count = self.historical_repo.bulk_insert(data)
+            return inserted_count
 
-            # Format dates for Coinbase API
-            start_str = self._format_datetime_for_coinbase(start)
-            end_str = self._format_datetime_for_coinbase(end)
-
-            # Coinbase API endpoint
-            url = f"{self.base_url}/products/{coinbase_symbol}/candles"
-            params = {"start": start_str, "end": end_str, "granularity": granularity}
-
-            logger.debug(
-                f"Fetching {coinbase_symbol} data from {start_str} to {end_str} ({self.interval_minutes}min interval)"
-            )
-
-            response = requests.get(url, params=params, timeout=30)
-            response.raise_for_status()
-
-            data = response.json()
-
-            if not data:
-                logger.debug(
-                    f"No data returned for {coinbase_symbol} on {start.date()} ({self.interval_minutes}min)"
-                )
-                return []
-
-            logger.debug(
-                f"Retrieved {len(data)} records for {coinbase_symbol} on {start.date()} ({self.interval_minutes}min)"
-            )
-
-            # Add delay to avoid rate limiting
-            time.sleep(self.request_delay)
-
-            return data
-
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 404:
-                logger.warning(f"Symbol {symbol} not found on Coinbase")
-                return None
-            elif e.response.status_code == 429:
-                logger.warning(f"Rate limited by Coinbase API, increasing delay")
-                self.request_delay = min(
-                    self.request_delay * 2, 5.0
-                )  # Max 5 second delay
-                raise  # Let retry handler deal with it
+        except Exception as e:
+            # Handle duplicate entries gracefully
+            if "UNIQUE constraint failed" in str(e) or "IntegrityError" in str(e):
+                # Try inserting one by one to skip duplicates
+                return self._store_data_individually(data)
             else:
-                logger.error(f"HTTP error fetching data for {symbol}: {e}")
+                self.logger.error(f"Error storing historical data: {e}")
                 raise
-        except Exception as e:
-            logger.error(f"Error fetching single day data for {symbol}: {e}")
-            raise
 
-    def _process_coinbase_data(
-        self, symbol: str, raw_data: List[List]
-    ) -> List[Dict[str, Any]]:
-        """
-        Process raw Coinbase API data into database format
+    def _store_data_individually(self, data: List[Dict[str, Any]]) -> int:
+        """Store data individually to handle duplicates"""
+        inserted_count = 0
 
-        Coinbase returns data in format: [timestamp, low, high, open, close, volume]
-        """
-        processed_data = []
-
-        for candle in raw_data:
-            try:
-                # Coinbase candle format: [timestamp, low, high, open, close, volume]
-                timestamp = datetime.fromtimestamp(candle[0])
-                low_price = float(candle[1])
-                high_price = float(candle[2])
-                open_price = float(candle[3])
-                close_price = float(candle[4])
-                volume = float(candle[5])
-
-                historical_record = {
-                    "symbol": symbol,  # Use original Robinhood symbol format
-                    "timestamp": timestamp,
-                    "interval_minutes": self.interval_minutes,  # NEW: Include interval
-                    "open": open_price,
-                    "high": high_price,
-                    "low": low_price,
-                    "close": close_price,
-                    "volume": volume,
-                }
-
-                processed_data.append(historical_record)
-
-            except (IndexError, ValueError, TypeError) as e:
-                logger.warning(f"Error processing historical record for {symbol}: {e}")
-                continue
-
-        # Sort by timestamp (Coinbase sometimes returns unsorted data)
-        processed_data.sort(key=lambda x: x["timestamp"])
-
-        return processed_data
-
-    def _fetch_initial_data_day_by_day(
-        self, symbol: str, db_session
-    ) -> List[Dict[str, Any]]:
-        """
-        Fetch initial historical data day by day to avoid API limits
-
-        Args:
-            symbol: Trading pair symbol (must be monitored)
-            db_session: Database session
-
-        Returns:
-            List of processed historical records
-        """
-        logger.info(
-            f"Fetching initial data for monitored symbol {symbol} - {self.days_back} days, one day at a time ({self.interval_minutes}min intervals)"
-        )
-
-        all_processed_data = []
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=self.days_back)
-
-        current_date = start_date
-        day_count = 0
-
-        while current_date < end_date:
-            try:
-                day_count += 1
-                next_date = current_date + timedelta(days=1)
-
-                # Don't go past the end date
-                if next_date > end_date:
-                    next_date = end_date
-
-                logger.debug(
-                    f"Fetching day {day_count}/{self.days_back} for {symbol}: {current_date.date()} ({self.interval_minutes}min)"
-                )
-
-                # Get one day of data
-                raw_data = self._get_single_day_data_from_coinbase(
-                    symbol, current_date, next_date
-                )
-
-                if raw_data is None:
-                    # Symbol not found on Coinbase
-                    logger.warning(f"Symbol {symbol} not available on Coinbase")
-                    return []
-
-                if raw_data:  # If we got data for this day
-                    # Process the data
-                    day_processed_data = self._process_coinbase_data(symbol, raw_data)
-                    all_processed_data.extend(day_processed_data)
-
-                    if day_processed_data:
-                        logger.debug(
-                            f"Added {len(day_processed_data)} records for {symbol} on {current_date.date()} ({self.interval_minutes}min)"
+        with DatabaseSession(self.db_manager) as db_session:
+            for record in data:
+                try:
+                    # Check if record already exists
+                    existing = (
+                        db_session.query(Historical)
+                        .filter_by(
+                            symbol=record["symbol"],
+                            timestamp=record["timestamp"],
+                            interval_minutes=record["interval_minutes"],
                         )
-
-                # Move to next day
-                current_date = next_date
-
-            except Exception as e:
-                logger.error(
-                    f"Error fetching data for {symbol} on {current_date.date()}: {e}"
-                )
-                # Continue to next day instead of failing completely
-                current_date = current_date + timedelta(days=1)
-                continue
-
-        logger.info(
-            f"Initial fetch complete for {symbol} ({self.interval_minutes}min): {len(all_processed_data)} total records"
-        )
-        return all_processed_data
-
-    def _fetch_date_range_day_by_day(
-        self, symbol: str, start_date: datetime, end_date: datetime
-    ) -> List[Dict[str, Any]]:
-        """
-        Fetch historical data for a date range, day by day to avoid API limits
-
-        Args:
-            symbol: Trading pair symbol
-            start_date: Start date for data collection
-            end_date: End date for data collection
-
-        Returns:
-            List of processed historical records
-        """
-        logger.info(
-            f"Fetching date range for {symbol} from {start_date.date()} to {end_date.date()}, day by day ({self.interval_minutes}min intervals)"
-        )
-
-        all_processed_data = []
-        current_date = start_date
-        day_count = 0
-        total_days = (end_date - start_date).days + 1
-
-        while current_date < end_date:
-            try:
-                day_count += 1
-                next_date = current_date + timedelta(days=1)
-
-                # Don't go past the end date
-                if next_date > end_date:
-                    next_date = end_date
-
-                logger.debug(
-                    f"Fetching day {day_count}/{total_days} for {symbol}: {current_date.date()} ({self.interval_minutes}min)"
-                )
-
-                # Get one day of data
-                raw_data = self._get_single_day_data_from_coinbase(
-                    symbol, current_date, next_date
-                )
-
-                if raw_data is None:
-                    # Symbol not found on Coinbase
-                    logger.warning(f"Symbol {symbol} not available on Coinbase")
-                    return []
-
-                if raw_data:  # If we got data for this day
-                    # Process the data
-                    day_processed_data = self._process_coinbase_data(symbol, raw_data)
-                    all_processed_data.extend(day_processed_data)
-
-                    if day_processed_data:
-                        logger.debug(
-                            f"Added {len(day_processed_data)} records for {symbol} on {current_date.date()} ({self.interval_minutes}min)"
-                        )
-
-                # Move to next day
-                current_date = next_date
-
-            except Exception as e:
-                logger.error(
-                    f"Error fetching data for {symbol} on {current_date.date()}: {e}"
-                )
-                # Continue to next day instead of failing completely
-                current_date = current_date + timedelta(days=1)
-                continue
-
-        logger.info(
-            f"Date range fetch complete for {symbol} ({self.interval_minutes}min): {len(all_processed_data)} total records"
-        )
-        return all_processed_data
-
-    def _fetch_incremental_data_from_latest(
-        self, symbol: str, db_session
-    ) -> List[Dict[str, Any]]:
-        """
-        Fetch incremental data from 24 hours before the latest record to now
-        This ensures we don't miss data if the app hasn't run for several days
-
-        Args:
-            symbol: Trading pair symbol (must be monitored)
-            db_session: Database session
-
-        Returns:
-            List of processed historical records
-        """
-        # Get the latest timestamp for this symbol and interval
-        latest_timestamp = DatabaseOperations.get_latest_historical_timestamp(
-            db_session, symbol, self.interval_minutes
-        )
-
-        if latest_timestamp is None:
-            logger.warning(
-                f"No latest timestamp found for {symbol} ({self.interval_minutes}min) during incremental fetch"
-            )
-            return []
-
-        # Calculate date range: 24 hours before latest record to now
-        start_date = latest_timestamp - timedelta(hours=24)
-        end_date = datetime.now()
-
-        days_gap = (end_date - latest_timestamp).days
-        logger.info(
-            f"Fetching incremental data for monitored symbol {symbol} ({self.interval_minutes}min)"
-        )
-        logger.info(f"Latest record: {latest_timestamp}, Gap: {days_gap} days")
-        logger.info(f"Fetching from {start_date} to {end_date} (includes 24h overlap)")
-
-        try:
-            # If gap is more than 7 days, fetch day by day to avoid API limits
-            if days_gap > 7:
-                logger.info(
-                    f"Gap is {days_gap} days, fetching day by day to avoid API limits"
-                )
-                return self._fetch_date_range_day_by_day(symbol, start_date, end_date)
-            else:
-                # Small gap, can fetch in one request
-                logger.info(f"Gap is {days_gap} days, fetching in single request")
-                raw_data = self._get_single_day_data_from_coinbase(
-                    symbol, start_date, end_date
-                )
-
-                if raw_data is None:
-                    logger.warning(f"Symbol {symbol} not available on Coinbase")
-                    return []
-
-                if not raw_data:
-                    logger.debug(
-                        f"No new data available for {symbol} ({self.interval_minutes}min)"
-                    )
-                    return []
-
-                # Process the data
-                processed_data = self._process_coinbase_data(symbol, raw_data)
-
-                logger.info(
-                    f"Incremental fetch complete for {symbol} ({self.interval_minutes}min): {len(processed_data)} records"
-                )
-                return processed_data
-
-        except Exception as e:
-            logger.error(
-                f"Error fetching incremental data for {symbol} ({self.interval_minutes}min): {e}"
-            )
-            return []
-
-    def _validate_symbol_with_coinbase(self, symbol: str) -> bool:
-        """Check if symbol exists on Coinbase before attempting to fetch data"""
-        try:
-            coinbase_symbol = self._convert_symbol_to_coinbase_format(symbol)
-            url = f"{self.base_url}/products/{coinbase_symbol}/stats"
-
-            response = requests.get(url, timeout=10)
-            if response.status_code == 200:
-                logger.debug(f"Symbol {coinbase_symbol} validated on Coinbase")
-                return True
-            elif response.status_code == 404:
-                logger.info(f"Symbol {coinbase_symbol} not available on Coinbase")
-                return False
-            else:
-                # For other errors, assume it might work and let the main function handle it
-                logger.warning(
-                    f"Could not validate symbol {coinbase_symbol} (status {response.status_code}), will attempt anyway"
-                )
-                return True
-
-        except Exception as e:
-            logger.warning(
-                f"Error validating symbol {symbol} with Coinbase: {e}, will attempt anyway"
-            )
-            return True  # Assume it might work
-
-    def collect_and_store(self, db_manager) -> bool:
-        """
-        Collect historical data and store in database
-
-        Args:
-            db_manager: Database manager instance
-
-        Returns:
-            True if successful, False otherwise
-        """
-        try:
-            logger.info(
-                f"Starting historical data collection from Coinbase ({self.interval_minutes}min intervals)"
-            )
-
-            with DatabaseSession(db_manager) as session:
-                # Get symbols that are marked as monitored
-                symbols = self._get_monitored_symbols(session)
-                if not symbols:
-                    logger.info(
-                        "No monitored symbols found, skipping historical data collection"
-                    )
-                    logger.info(
-                        "Use 'python set_monitored_flag.py --holdings --true' to set monitored flags"
-                    )
-                    return True
-
-                total_records = 0
-                successful_symbols = 0
-                failed_symbols = []
-
-                for symbol in symbols:
-                    try:
-                        logger.info(
-                            f"Processing historical data for {symbol} ({self.interval_minutes}min)"
-                        )
-
-                        # Validate symbol exists on Coinbase and is monitored
-                        if not self._validate_symbol_with_coinbase(symbol):
-                            logger.warning(
-                                f"Skipping {symbol} - not available on Coinbase"
-                            )
-                            failed_symbols.append(symbol)
-                            continue
-
-                        # Check if we have existing data for this interval
-                        latest_timestamp = (
-                            DatabaseOperations.get_latest_historical_timestamp(
-                                session, symbol, self.interval_minutes
-                            )
-                        )
-
-                        if latest_timestamp is None:
-                            # Initial pull - fetch day by day
-                            logger.info(
-                                f"No existing data for monitored symbol {symbol} ({self.interval_minutes}min) - performing initial fetch"
-                            )
-                            processed_data = self._fetch_initial_data_day_by_day(
-                                symbol, session
-                            )
-                        else:
-                            # Incremental pull - fetch from 24 hours before latest record
-                            logger.info(
-                                f"Found existing data for monitored symbol {symbol} ({self.interval_minutes}min) until {latest_timestamp} - performing incremental fetch"
-                            )
-                            processed_data = self._fetch_incremental_data_from_latest(
-                                symbol, session
-                            )
-
-                        if not processed_data:
-                            logger.warning(
-                                f"No data retrieved for {symbol} ({self.interval_minutes}min)"
-                            )
-                            failed_symbols.append(symbol)
-                            continue
-
-                        # Store in database (this handles duplicates automatically)
-                        count = DatabaseOperations.insert_historical_data(
-                            session, processed_data
-                        )
-                        total_records += count
-                        successful_symbols += 1
-
-                        logger.info(
-                            f"Stored {count} new historical records for monitored symbol {symbol} ({self.interval_minutes}min)"
-                        )
-
-                    except Exception as e:
-                        logger.error(
-                            f"Failed to collect historical data for {symbol} ({self.interval_minutes}min): {e}"
-                        )
-                        failed_symbols.append(symbol)
-                        continue
-
-                # Log summary
-                if failed_symbols:
-                    logger.warning(
-                        f"Failed to collect data for monitored symbols ({self.interval_minutes}min): {failed_symbols}"
+                        .first()
                     )
 
-                logger.info(
-                    f"Historical data collection completed ({self.interval_minutes}min): {total_records} new records for {successful_symbols}/{len(symbols)} monitored symbols"
-                )
-                return (
-                    successful_symbols > 0 or len(symbols) == 0
-                )  # Success if we processed something or had nothing to process
+                    if not existing:
+                        historical_record = Historical(**record)
+                        db_session.add(historical_record)
+                        inserted_count += 1
 
-        except Exception as e:
-            logger.error(
-                f"Failed to collect and store historical data ({self.interval_minutes}min): {e}"
-            )
-            return False
+                except Exception as e:
+                    self.logger.debug(f"Skipping duplicate record: {e}")
+                    continue
+
+        return inserted_count

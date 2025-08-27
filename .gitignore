@@ -55,4 +55,6 @@ Thumbs.db
 #project
 crypto_trading.db*
 *.old
-
+old/
+.venv/
+backup_old_architecture/
