@@ -11,13 +11,13 @@ from collectors.historical_collector import HistoricalCollector
 
 
 class DataCollectorApp(BaseApplication):
-    """Complete data collection app with all refactored collectors"""
+    """Data collection app with dynamic historical collector creation"""
 
     def get_app_name(self) -> str:
-        return "Robinhood Crypto Data Collector (Complete)"
+        return "Robinhood Crypto Data Collector"
 
     def _setup_custom(self) -> None:
-        """Setup all collectors using the refactored architecture"""
+        """Setup all collectors using dynamic historical collector creation"""
         # Get dependencies from container
         db_manager = self.context.container.get("db_manager")
         crypto_repo = self.context.container.get("crypto_repo")
@@ -32,9 +32,10 @@ class DataCollectorApp(BaseApplication):
         if self.context.container.has("api_client"):
             api_client = self.context.container.get("api_client")
 
-        # Create collectors
+        # Create collectors list
         collectors = []
 
+        # Add Robinhood API-dependent collectors if available
         if api_client:
             collectors.extend(
                 [
@@ -47,95 +48,131 @@ class DataCollectorApp(BaseApplication):
                     ),
                 ]
             )
+            self.context.logger.info("Added Robinhood API collectors")
         else:
             self.context.logger.warning(
                 "API client not available - skipping Robinhood collectors"
             )
 
-        # Add refactored historical collector
-        collectors.append(
-            HistoricalCollector(
-                db_manager=db_manager,
-                retry_config=self.context.config.retry,
-                historical_repo=historical_repo,
-                crypto_repo=crypto_repo,
-                days_back=self.context.config.historical.days_back,
-                interval_minutes=self.context.config.historical.interval_minutes,
-                buffer_days=self.context.config.historical.buffer_days,
-            )
-        )
+        # Create historical collectors for each configured interval
+        enabled_intervals = self.context.config.historical.get_enabled_intervals()
 
-        collectors.append(
-            HistoricalCollector(
+        for interval_config in enabled_intervals:
+            collector = HistoricalCollector(
                 db_manager=db_manager,
                 retry_config=self.context.config.retry,
                 historical_repo=historical_repo,
                 crypto_repo=crypto_repo,
-                days_back=self.context.config.historical.days_back,
-                interval_minutes=60,
-                buffer_days=self.context.config.historical.buffer_days,
+                days_back=interval_config.days_back,
+                interval_minutes=interval_config.interval_minutes,
+                buffer_days=interval_config.buffer_days,
             )
-        )
+            collectors.append(collector)
+
+            self.context.logger.info(
+                f"Added historical collector: {interval_config.interval_minutes}min "
+                f"({interval_config.days_back} days back)"
+            )
 
         # Store collectors
         self.collectors = collectors
-        self.context.logger.info(f"Setup complete with {len(collectors)} collectors")
+        self.context.logger.info(
+            f"Setup complete with {len(collectors)} collectors "
+            f"({len(enabled_intervals)} historical intervals)"
+        )
 
     def _run_main(self) -> int:
-        """Main data collection logic"""
+        """Main data collection logic with enhanced reporting"""
         success_count = 0
         failure_count = 0
         failed_collectors = []
+        collector_results = {}
 
         for collector in self.collectors:
+            collector_name = collector.get_collector_name()
             try:
                 if collector.safe_collect_and_store():
                     success_count += 1
+                    collector_results[collector_name] = "SUCCESS"
                 else:
                     failure_count += 1
-                    failed_collectors.append(collector.get_collector_name())
+                    failed_collectors.append(collector_name)
+                    collector_results[collector_name] = "FAILED"
 
             except Exception as e:
                 self.context.error_handler.handle_error(
                     e,
-                    f"{collector.get_collector_name()} collection",
+                    f"{collector_name} collection",
                     extra_data={"collector": collector.__class__.__name__},
                 )
                 failure_count += 1
-                failed_collectors.append(collector.get_collector_name())
+                failed_collectors.append(collector_name)
+                collector_results[collector_name] = f"ERROR: {str(e)[:50]}..."
 
-        # Log summary
-        self.context.logger.info(f"=== Collection Summary ===")
+        # Enhanced summary logging
+        self.context.logger.info("=== Collection Summary ===")
+        self.context.logger.info(f"Total collectors: {len(self.collectors)}")
         self.context.logger.info(f"Successful: {success_count}")
         self.context.logger.info(f"Failed: {failure_count}")
+
+        # Log individual collector results
+        for collector_name, result in collector_results.items():
+            status_emoji = "✅" if result == "SUCCESS" else "❌"
+            self.context.logger.info(f"  {status_emoji} {collector_name}: {result}")
 
         if failed_collectors:
             self.context.logger.warning(
                 f"Failed collections: {', '.join(failed_collectors)}"
             )
 
-        # Cleanup old data if configured
-        self._cleanup_old_data()
+        # Cleanup old data for each interval
+        self._cleanup_old_data_for_all_intervals()
 
-        return 0 if failure_count == 0 else (1 if success_count > 0 else 2)
+        # Return appropriate exit code
+        if failure_count == 0:
+            return 0  # All successful
+        elif success_count > 0:
+            return 1  # Partial success
+        else:
+            return 2  # All failed
 
-    def _cleanup_old_data(self) -> None:
-        """Cleanup old historical data using repository"""
+    def _cleanup_old_data_for_all_intervals(self) -> None:
+        """Cleanup old historical data for all configured intervals"""
         try:
-            if hasattr(self.context.config.historical, "cleanup_days"):
-                # Get historical repository
-                db_manager = self.context.container.get("db_manager")
-                from data.repositories.historical_repository import HistoricalRepository
+            db_manager = self.context.container.get("db_manager")
+            from data.repositories.historical_repository import HistoricalRepository
 
-                historical_repo = HistoricalRepository(db_manager)
+            historical_repo = HistoricalRepository(db_manager)
 
-                cleanup_days = self.context.config.historical.cleanup_days
-                deleted_count = historical_repo.delete_old_data(cleanup_days)
+            enabled_intervals = self.context.config.historical.get_enabled_intervals()
+            total_deleted = 0
 
-                if deleted_count > 0:
-                    self.context.logger.info(
-                        f"Cleaned up {deleted_count} old historical records"
-                    )
+            for interval_config in enabled_intervals:
+                if (
+                    hasattr(interval_config, "cleanup_days")
+                    and interval_config.cleanup_days > 0
+                ):
+                    try:
+                        deleted_count = historical_repo.delete_old_data(
+                            interval_config.cleanup_days
+                        )
+                        total_deleted += deleted_count
+
+                        if deleted_count > 0:
+                            self.context.logger.info(
+                                f"Cleaned up {deleted_count} old records "
+                                f"for {interval_config.interval_minutes}min interval"
+                            )
+                    except Exception as e:
+                        self.context.error_handler.handle_error(
+                            e,
+                            f"cleanup for {interval_config.interval_minutes}min interval",
+                        )
+
+            if total_deleted > 0:
+                self.context.logger.info(
+                    f"Total cleanup: removed {total_deleted} old historical records"
+                )
 
         except Exception as e:
             self.context.error_handler.handle_error(e, "historical data cleanup")

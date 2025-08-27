@@ -7,8 +7,8 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
 import logging
 
-from database.connections import DatabaseManager
-from utils.retry import RetryConfig, retry_with_backoff
+from database import DatabaseManager
+from utils import RetryConfig, retry_with_backoff
 
 
 class BaseCollector(ABC):

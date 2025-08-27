@@ -1,25 +1,50 @@
 {
-  "robinhood": {
-    "api_key": "rh-f",
-    "private_key_base64": "="
-  },
   "database": {
-    "path": "crypto_trading.db"
-  },
-  "historical_data": {
-    "days_back": 60,
-    "interval_minutes": 15,
-    "buffer_days": 1
+    "path": "crypto_trading.db",
+    "echo": false,
+    "pool_size": 5,
+    "max_overflow": 10
   },
   "logging": {
     "level": "INFO",
+    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     "file_path": "logs/app.log",
-    "max_file_size_mb": 10,
+    "max_file_size": 10485760,
     "backup_count": 5
+  },
+  "robinhood": {
+    "api_key": "rh-xxx",
+    "private_key_base64": "xxx=",
+    "base_url": "https://trading.robinhood.com",
+    "request_timeout": 30,
+    "max_retries": 3
   },
   "retry": {
     "max_attempts": 3,
-    "backoff_factor": 2,
-    "initial_delay": 1
+    "backoff_factor": 2.0,
+    "initial_delay": 1.0
+  },
+  "trading": {
+    "monitored_symbols": [
+      "BTC-USD",
+      "ETH-USD",
+      "ADA-USD",
+      "SOL-USD"
+    ],
+    "alert_timeout_hours": 12,
+    "strategy_config": {
+      "rsi_period": 14,
+      "rsi_overbought": 70,
+      "rsi_oversold": 30,
+      "macd_fast": 12,
+      "macd_slow": 26,
+      "macd_signal": 9
+    }
+  },
+  "historical": {
+    "days_back": 30,
+    "interval_minutes": 15,
+    "buffer_days": 1,
+    "cleanup_days": 30
   }
 }
