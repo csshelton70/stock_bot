@@ -2,6 +2,7 @@
 """
 Refactored Historical Collector using the new base collector architecture
 Collects historical OHLCV candlestick data from Coinbase API
+FIXED: Enhanced duplicate prevention and error handling
 """
 
 import time
@@ -9,6 +10,8 @@ import requests
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, timedelta
 import logging
+from sqlalchemy import and_
+
 
 from .base_collector import BaseCollector
 from database.connections import DatabaseManager
@@ -23,6 +26,7 @@ class HistoricalCollector(BaseCollector):
     """
     Refactored historical collector using repository pattern
     Collects OHLCV data from Coinbase Exchange API
+    FIXED: Enhanced duplicate prevention and data integrity
     """
 
     def __init__(
@@ -51,7 +55,7 @@ class HistoricalCollector(BaseCollector):
         return f"Historical Price Data ({self.interval_minutes}min intervals)"
 
     def collect_and_store(self) -> bool:
-        """Main collection logic using repository pattern"""
+        """Main collection logic using repository pattern - FIXED"""
         try:
             # Get monitored symbols
             monitored_symbols = self._get_monitored_symbols()
@@ -67,6 +71,7 @@ class HistoricalCollector(BaseCollector):
             collection_stats = {
                 "symbols_processed": 0,
                 "records_inserted": 0,
+                "records_skipped": 0,
                 "symbols_with_errors": 0,
                 "api_requests_made": 0,
             }
@@ -74,11 +79,22 @@ class HistoricalCollector(BaseCollector):
             # Process each monitored symbol
             for symbol in monitored_symbols:
                 try:
-                    records_added = self._collect_symbol_data(symbol)
+                    symbol_stats = self._collect_symbol_data(symbol)
                     collection_stats["symbols_processed"] += 1
-                    collection_stats["records_inserted"] += records_added
+                    collection_stats["records_inserted"] += symbol_stats.get(
+                        "inserted", 0
+                    )
+                    collection_stats["records_skipped"] += symbol_stats.get(
+                        "skipped", 0
+                    )
+                    collection_stats["api_requests_made"] += symbol_stats.get(
+                        "api_requests", 0
+                    )
 
-                    self.logger.info(f"Collected {records_added} records for {symbol}")
+                    self.logger.info(
+                        f"{symbol}: {symbol_stats.get('inserted', 0)} inserted, "
+                        f"{symbol_stats.get('skipped', 0)} skipped duplicates"
+                    )
 
                     # Rate limiting delay
                     time.sleep(self.request_delay)
@@ -105,32 +121,41 @@ class HistoricalCollector(BaseCollector):
             self.logger.error(f"Error getting monitored symbols: {e}")
             return []
 
-    def _collect_symbol_data(self, symbol: str) -> int:
-        """Collect historical data for a single symbol"""
+    def _collect_symbol_data(self, symbol: str) -> Dict[str, int]:
+        """
+        Collect historical data for a single symbol - FIXED
+        Returns statistics about records inserted vs skipped
+        """
         try:
             # Check if we have existing data
             latest_timestamp = self.historical_repo.get_latest_timestamp(
                 symbol, self.interval_minutes
             )
 
+            stats = {"inserted": 0, "skipped": 0, "api_requests": 0}
+
             if latest_timestamp is None:
                 # No existing data - collect initial dataset
-                return self._collect_initial_data(symbol)
+                result = self._collect_initial_data(symbol)
+                stats.update(result)
             else:
                 # Incremental update from latest data
-                return self._collect_incremental_data(symbol, latest_timestamp)
+                result = self._collect_incremental_data(symbol, latest_timestamp)
+                stats.update(result)
+
+            return stats
 
         except Exception as e:
             self.logger.error(f"Error collecting data for {symbol}: {e}")
             raise
 
-    def _collect_initial_data(self, symbol: str) -> int:
-        """Collect initial historical data day by day"""
+    def _collect_initial_data(self, symbol: str) -> Dict[str, int]:
+        """Collect initial historical data day by day - FIXED"""
         try:
             end_date = datetime.utcnow()
             start_date = end_date - timedelta(days=self.days_back)
 
-            total_records = 0
+            stats = {"inserted": 0, "skipped": 0, "api_requests": 0}
             current_date = start_date
 
             self.logger.info(
@@ -143,14 +168,27 @@ class HistoricalCollector(BaseCollector):
 
                     # Get data for this day
                     day_data = self._fetch_coinbase_data(symbol, current_date, day_end)
+                    stats["api_requests"] += 1
 
                     if day_data:
-                        # Store data using repository
-                        inserted = self._store_historical_data(symbol, day_data)
-                        total_records += inserted
+                        # Pre-filter for existing data before attempting to store
+                        filtered_data = self._filter_existing_data(symbol, day_data)
+
+                        if filtered_data:
+                            # Store data using repository
+                            inserted = self._store_historical_data(
+                                symbol, filtered_data
+                            )
+                            stats["inserted"] += inserted
+                            stats["skipped"] += len(day_data) - len(filtered_data)
+                        else:
+                            stats["skipped"] += len(day_data)
+                            self.logger.debug(
+                                f"{symbol}: {current_date.date()} - all records already exist"
+                            )
 
                         self.logger.debug(
-                            f"{symbol}: {current_date.date()} - {inserted} records"
+                            f"{symbol}: {current_date.date()} - {len(filtered_data)} new/{len(day_data)} total"
                         )
 
                     # Rate limiting
@@ -164,28 +202,50 @@ class HistoricalCollector(BaseCollector):
                     current_date += timedelta(days=1)
                     continue
 
-            return total_records
+            return stats
 
         except Exception as e:
             self.logger.error(f"Initial data collection failed for {symbol}: {e}")
             raise
 
-    def _collect_incremental_data(self, symbol: str, latest_timestamp: datetime) -> int:
-        """Collect incremental data from the latest timestamp"""
+    def _collect_incremental_data(
+        self, symbol: str, latest_timestamp: datetime
+    ) -> Dict[str, int]:
+        """Collect incremental data from the latest timestamp - FIXED"""
         try:
             # Start from buffer days before latest to ensure no gaps
             start_time = latest_timestamp - timedelta(days=self.buffer_days)
             end_time = datetime.utcnow()
 
+            stats = {"inserted": 0, "skipped": 0, "api_requests": 0}
             gap_days = (end_time - start_time).days
+
+            self.logger.info(
+                f"Collecting incremental data for {symbol} from {start_time} to {end_time} ({gap_days} days)"
+            )
 
             if gap_days <= 7:
                 # Small gap - single request
                 data = self._fetch_coinbase_data(symbol, start_time, end_time)
-                return self._store_historical_data(symbol, data) if data else 0
+                stats["api_requests"] += 1
+
+                if data:
+                    # Pre-filter existing data
+                    filtered_data = self._filter_existing_data(symbol, data)
+
+                    if filtered_data:
+                        inserted = self._store_historical_data(symbol, filtered_data)
+                        stats["inserted"] = inserted
+                        stats["skipped"] = len(data) - len(filtered_data)
+                    else:
+                        stats["skipped"] = len(data)
+
             else:
                 # Large gap - day by day
-                return self._collect_gap_data_day_by_day(symbol, start_time, end_time)
+                result = self._collect_gap_data_day_by_day(symbol, start_time, end_time)
+                stats.update(result)
+
+            return stats
 
         except Exception as e:
             self.logger.error(f"Incremental data collection failed for {symbol}: {e}")
@@ -193,9 +253,9 @@ class HistoricalCollector(BaseCollector):
 
     def _collect_gap_data_day_by_day(
         self, symbol: str, start_time: datetime, end_time: datetime
-    ) -> int:
-        """Collect data day by day for large gaps"""
-        total_records = 0
+    ) -> Dict[str, int]:
+        """Collect data day by day for large gaps - FIXED"""
+        stats = {"inserted": 0, "skipped": 0, "api_requests": 0}
         current_time = start_time
 
         self.logger.info(
@@ -207,9 +267,18 @@ class HistoricalCollector(BaseCollector):
                 day_end = min(current_time + timedelta(days=1), end_time)
 
                 data = self._fetch_coinbase_data(symbol, current_time, day_end)
+                stats["api_requests"] += 1
+
                 if data:
-                    inserted = self._store_historical_data(symbol, data)
-                    total_records += inserted
+                    # Pre-filter existing data
+                    filtered_data = self._filter_existing_data(symbol, data)
+
+                    if filtered_data:
+                        inserted = self._store_historical_data(symbol, filtered_data)
+                        stats["inserted"] += inserted
+                        stats["skipped"] += len(data) - len(filtered_data)
+                    else:
+                        stats["skipped"] += len(data)
 
                 time.sleep(self.request_delay)
                 current_time = day_end
@@ -221,12 +290,62 @@ class HistoricalCollector(BaseCollector):
                 current_time += timedelta(days=1)
                 continue
 
-        return total_records
+        return stats
+
+    def _filter_existing_data(
+        self, symbol: str, data: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Pre-filter data to remove records that already exist - NEW METHOD
+        This reduces database load by checking for existing records before attempting bulk insert
+        """
+        if not data:
+            return []
+
+        try:
+            with self.db_manager.get_session() as session:
+                # Get existing timestamps for this symbol/interval in the data range
+                timestamps = [record["timestamp"] for record in data]
+                min_time = min(timestamps)
+                max_time = max(timestamps)
+
+                existing_records = (
+                    session.query(Historical.timestamp)
+                    .filter(
+                        and_(
+                            Historical.symbol == symbol,
+                            Historical.interval_minutes == self.interval_minutes,
+                            Historical.timestamp >= min_time,
+                            Historical.timestamp <= max_time,
+                        )
+                    )
+                    .all()
+                )
+
+                # Create set of existing timestamps for fast lookup
+                existing_timestamps = {record.timestamp for record in existing_records}
+
+                # Filter out existing records
+                new_data = []
+                for record in data:
+                    if record["timestamp"] not in existing_timestamps:
+                        new_data.append(record)
+
+                self.logger.debug(
+                    f"Filtered {symbol}: {len(new_data)} new/{len(data)} total records"
+                )
+
+                return new_data
+
+        except Exception as e:
+            self.logger.warning(f"Error pre-filtering data for {symbol}: {e}")
+            # If pre-filtering fails, return all data and let repository handle duplicates
+            return data
 
     def _fetch_coinbase_data(
         self, symbol: str, start_time: datetime, end_time: datetime
     ) -> List[Dict[str, Any]]:
-        """Fetch historical data from Coinbase API"""
+        """Fetch historical data from Coinbase API - ENHANCED"""
         try:
             # Convert interval to Coinbase granularity (seconds)
             granularity = self._get_coinbase_granularity()
@@ -262,28 +381,51 @@ class HistoricalCollector(BaseCollector):
                 self.logger.debug(f"No data returned for {symbol}")
                 return []
 
-            # Convert Coinbase format to our format
+            # Convert Coinbase format to our format with validation
             processed_data = []
             for candle in candles:
-                # Coinbase format: [timestamp, low, high, open, close, volume]
-                timestamp, low, high, open_price, close, volume = candle
+                try:
+                    # Coinbase format: [timestamp, low, high, open, close, volume]
+                    timestamp, low, high, open_price, close, volume = candle
 
-                processed_data.append(
-                    {
-                        "symbol": symbol,
-                        "timestamp": datetime.fromtimestamp(timestamp),
-                        "interval_minutes": self.interval_minutes,
-                        "open": float(open_price),
-                        "high": float(high),
-                        "low": float(low),
-                        "close": float(close),
-                        "volume": float(volume) if volume else 0.0,
-                    }
-                )
+                    # Validate data integrity
+                    if not all(
+                        isinstance(x, (int, float))
+                        for x in [low, high, open_price, close]
+                    ):
+                        self.logger.debug(f"Skipping invalid candle data: {candle}")
+                        continue
+
+                    # Validate OHLC logic
+                    if not (low <= open_price <= high and low <= close <= high):
+                        self.logger.debug(f"Skipping invalid OHLC data: {candle}")
+                        continue
+
+                    processed_data.append(
+                        {
+                            "symbol": symbol,
+                            "timestamp": datetime.fromtimestamp(timestamp),
+                            "interval_minutes": self.interval_minutes,
+                            "open": float(open_price),
+                            "high": float(high),
+                            "low": float(low),
+                            "close": float(close),
+                            "volume": float(volume) if volume else 0.0,
+                        }
+                    )
+
+                except (ValueError, TypeError, IndexError) as e:
+                    self.logger.debug(
+                        f"Skipping malformed candle: {candle}, error: {e}"
+                    )
+                    continue
 
             # Sort by timestamp (oldest first)
             processed_data.sort(key=lambda x: x["timestamp"])
 
+            self.logger.debug(
+                f"Processed {len(processed_data)} valid records for {symbol}"
+            )
             return processed_data
 
         except requests.exceptions.RequestException as e:
@@ -306,49 +448,145 @@ class HistoricalCollector(BaseCollector):
             return 86400  # 1 day
 
     def _store_historical_data(self, symbol: str, data: List[Dict[str, Any]]) -> int:
-        """Store historical data using repository"""
+        """
+        Store historical data using repository - ENHANCED
+        This method now relies on the repository's improved duplicate handling
+        """
         if not data:
             return 0
 
         try:
-            # Use repository to bulk insert
+            # Use repository's enhanced bulk insert method
             inserted_count = self.historical_repo.bulk_insert(data)
             return inserted_count
 
         except Exception as e:
-            # Handle duplicate entries gracefully
-            if "UNIQUE constraint failed" in str(e) or "IntegrityError" in str(e):
-                # Try inserting one by one to skip duplicates
-                return self._store_data_individually(data)
-            else:
-                self.logger.error(f"Error storing historical data: {e}")
-                raise
+            self.logger.error(f"Error storing historical data for {symbol}: {e}")
+            # Don't re-raise - log error and return 0 to continue with other symbols
+            return 0
 
-    def _store_data_individually(self, data: List[Dict[str, Any]]) -> int:
-        """Store data individually to handle duplicates"""
-        inserted_count = 0
+    def validate_collected_data(self, symbol: str, data: List[Dict[str, Any]]) -> bool:
+        """
+        Validate collected data before storage - NEW METHOD
+        Performs comprehensive validation to ensure data quality
+        """
+        if not data:
+            return True  # Empty data is valid (no data to collect)
 
-        with DatabaseSession(self.db_manager) as db_session:
-            for record in data:
-                try:
-                    # Check if record already exists
-                    existing = (
-                        db_session.query(Historical)
-                        .filter_by(
-                            symbol=record["symbol"],
-                            timestamp=record["timestamp"],
-                            interval_minutes=record["interval_minutes"],
-                        )
-                        .first()
+        try:
+            for i, record in enumerate(data):
+                # Check required fields
+                required_fields = [
+                    "symbol",
+                    "timestamp",
+                    "interval_minutes",
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                ]
+                missing_fields = [
+                    field for field in required_fields if field not in record
+                ]
+
+                if missing_fields:
+                    self.logger.warning(f"Record {i} missing fields: {missing_fields}")
+                    return False
+
+                # Validate OHLC relationships
+                open_price, high, low, close = (
+                    record["open"],
+                    record["high"],
+                    record["low"],
+                    record["close"],
+                )
+
+                if not (low <= open_price <= high and low <= close <= high):
+                    self.logger.warning(
+                        f"Record {i} has invalid OHLC: O={open_price}, H={high}, L={low}, C={close}"
                     )
+                    return False
 
-                    if not existing:
-                        historical_record = Historical(**record)
-                        db_session.add(historical_record)
-                        inserted_count += 1
+                # Check for reasonable values (not negative, not zero for most cases)
+                if any(val <= 0 for val in [open_price, high, low, close]):
+                    self.logger.warning(f"Record {i} has non-positive price values")
+                    return False
+
+                # Validate timestamp
+                if not isinstance(record["timestamp"], datetime):
+                    self.logger.warning(f"Record {i} has invalid timestamp type")
+                    return False
+
+            # Check for chronological order
+            timestamps = [record["timestamp"] for record in data]
+            if timestamps != sorted(timestamps):
+                self.logger.warning("Data is not in chronological order")
+
+                # Sort the data
+                data.sort(key=lambda x: x["timestamp"])
+                self.logger.info("Data sorted chronologically")
+
+            self.logger.debug(f"Validated {len(data)} records for {symbol}")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Data validation failed for {symbol}: {e}")
+            return False
+
+    def check_data_integrity_post_collection(self, symbol: str) -> Dict[str, Any]:
+        """
+        Check data integrity after collection - NEW METHOD
+        Provides detailed statistics about the collected data
+        """
+        try:
+            integrity_report = self.historical_repo.check_data_integrity(
+                symbol, self.interval_minutes
+            )
+
+            # Add collector-specific checks
+            gaps = self.historical_repo.get_data_gaps(
+                symbol, self.interval_minutes, self.interval_minutes
+            )
+            integrity_report["data_gaps"] = len(gaps)
+            integrity_report["gap_details"] = gaps[:5]  # First 5 gaps for analysis
+
+            return integrity_report
+
+        except Exception as e:
+            self.logger.error(f"Integrity check failed for {symbol}: {e}")
+            return {"error": str(e)}
+
+    def get_collection_summary(self) -> Dict[str, Any]:
+        """
+        Get comprehensive collection summary - NEW METHOD
+        Provides overview of all collected data across symbols
+        """
+        try:
+            symbols = self._get_monitored_symbols()
+            summary = {
+                "collector_type": self.get_collector_name(),
+                "interval_minutes": self.interval_minutes,
+                "monitored_symbols": len(symbols),
+                "symbol_details": {},
+            }
+
+            for symbol in symbols:
+                try:
+                    symbol_summary = self.historical_repo.get_record_count_by_symbol(
+                        symbol
+                    )
+                    integrity = self.check_data_integrity_post_collection(symbol)
+
+                    summary["symbol_details"][symbol] = {
+                        "record_counts": symbol_summary,
+                        "integrity": integrity,
+                    }
 
                 except Exception as e:
-                    self.logger.debug(f"Skipping duplicate record: {e}")
-                    continue
+                    summary["symbol_details"][symbol] = {"error": str(e)}
 
-        return inserted_count
+            return summary
+
+        except Exception as e:
+            self.logger.error(f"Error generating collection summary: {e}")
+            return {"error": str(e)}
