@@ -3,15 +3,16 @@
 Improved Database Operations for Robinhood Crypto Trading App
 Enhanced with Trading System operations and better error handling
 """
+#pylint:disable=broad-exception-caught,logging-fstring-interpolation
 
 import logging
-import pandas as pd
-from typing import List, Dict, Any, Optional, Union, Tuple
 from datetime import datetime, timedelta
+from typing import List, Dict, Any, Optional
+import json
+
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy import and_, desc, func, text, or_
-import json
+from sqlalchemy import and_,  func
 
 
 from database.models import (

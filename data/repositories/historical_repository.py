@@ -104,9 +104,9 @@ class HistoricalRepository(BaseRepository[Historical]):
                 self.logger.info("No unique records to insert after deduplication")
                 return 0
 
-            self.logger.info(
-                f"Deduplicated {len(historical_data)} records to {len(unique_records)}"
-            )
+            # self.logger.info(
+            #     f"Deduplicated {len(historical_data)} records to {len(unique_records)}"
+            # )
 
             # Check existing records efficiently using batch queries
             existing_keys = self._get_existing_keys_batch(session, unique_records)

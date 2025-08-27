@@ -4,12 +4,16 @@ Alert and system log repository
 Manages trading alerts and system events
 """
 
-from typing import List, Optional
-from sqlalchemy import desc, and_
+# pylint:disable=broad-exception-caught,trailing-whitespace,line-too-long
+
 from datetime import datetime, timedelta
 
-from .base_repository import BaseRepository
+from typing import List, Optional
+from sqlalchemy import desc, and_
+
 from database.models import AlertStates, SystemLog
+
+from .base_repository import BaseRepository
 
 
 class AlertRepository(BaseRepository[AlertStates]):
@@ -21,7 +25,7 @@ class AlertRepository(BaseRepository[AlertStates]):
     def get_active_alerts(self, symbol: Optional[str] = None) -> List[AlertStates]:
         """Get all active alerts, optionally filtered by symbol"""
         with self.get_session() as session:
-            query = session.query(AlertStates).filter(AlertStates.status == "active")
+            query = session.query(AlertStates).filter(AlertStates.status == "active") #type:ignore
 
             if symbol:
                 query = query.filter(AlertStates.symbol == symbol)
@@ -32,7 +36,7 @@ class AlertRepository(BaseRepository[AlertStates]):
         """Expire alerts created before cutoff time"""
         with self.get_session() as session:
             expired = (
-                session.query(AlertStates)
+                session.query(AlertStates)  #type:ignore
                 .filter(
                     and_(
                         AlertStates.status == "active",
@@ -50,7 +54,7 @@ class AlertRepository(BaseRepository[AlertStates]):
 
         with self.get_session() as session:
             return (
-                session.query(AlertStates)
+                session.query(AlertStates) #type:ignore
                 .filter(
                     and_(
                         AlertStates.symbol == symbol,
@@ -72,7 +76,7 @@ class AlertRepository(BaseRepository[AlertStates]):
         cutoff_time = datetime.utcnow() - timedelta(hours=hours)
 
         with self.get_session() as session:
-            query = session.query(SystemLog).filter(SystemLog.timestamp >= cutoff_time)
+            query = session.query(SystemLog).filter(SystemLog.timestamp >= cutoff_time)  #type:ignore
 
             if symbol:
                 query = query.filter(SystemLog.symbol == symbol)

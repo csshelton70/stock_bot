@@ -5,21 +5,17 @@ Refactored trading system runner script
 """
 
 import sys
-import os
-
-# Add project root to Python path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from apps.trading_system_app import TradingSystemApp
 
 
-def main():
+def main()->int:
     """Main entry point for trading system"""
     app = TradingSystemApp()
-    exit_code = app.run()
-    return exit_code
+    f_exit_code = app.run()
+    return f_exit_code
 
 
 if __name__ == "__main__":
-    exit_code = main()
+    exit_code:int = main()
     sys.exit(exit_code)

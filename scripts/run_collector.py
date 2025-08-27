@@ -4,22 +4,20 @@
 Refactored data collection runner script
 """
 
+# pylint:disable=broad-exception-caught,trailing-whitespace,line-too-long,logging-fstring-interpolation
+
 import sys
-import os
 
-# Add project root to Python path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from apps.data_collector_app import DataCollectorApp
+from apps.data_collector_app import DataCollectorApp 
 
 
-def main():
+def main() -> int:
     """Main entry point for data collection"""
     app = DataCollectorApp()
-    exit_code = app.run()
-    return exit_code
+    f_exit_code = app.run()
+    return f_exit_code
 
 
 if __name__ == "__main__":
-    exit_code = main()
+    exit_code:int = main()
     sys.exit(exit_code)

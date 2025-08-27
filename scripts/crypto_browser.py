@@ -2,10 +2,9 @@
 """
 Simple database browser for viewing and updating crypto symbols
 """
+# pylint:disable=broad-exception-caught,trailing-whitespace
 
 import sqlite3
-import sys
-from typing import List
 
 
 def browse_crypto_table(db_path: str = "crypto_trading.db"):
