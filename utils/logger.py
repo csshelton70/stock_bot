@@ -218,8 +218,18 @@ def setup_logging(config: LoggingConfig) -> logging.Logger:
     root_logger = logging.getLogger()
     root_logger.setLevel(getattr(logging, config.level.upper(), logging.INFO))
 
-    # Clear existing handlers to avoid duplicates
-    root_logger.handlers.clear()
+    # CRITICAL: Force clear ALL existing handlers to prevent duplicates
+    for handler in root_logger.handlers[:]:  # Copy list to avoid modification during iteration
+        root_logger.removeHandler(handler)
+        handler.close()
+    
+    # Also clear any existing loggers that might have handlers
+    existing_loggers = [logging.getLogger(name) for name in logging.getLogger().manager.loggerDict]
+    for logger in existing_loggers:
+        if logger.handlers:
+            for handler in logger.handlers[:]:
+                logger.removeHandler(handler)
+                handler.close()
 
     # Create enhanced formatters
     console_formatter = DetailedFormatter(include_colors=True)
