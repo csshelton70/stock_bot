@@ -3,18 +3,53 @@
 Enhanced logging configuration with Unicode support for Windows
 """
 
+# pylint:disable=broad-exception-caught,trailing-whitespace,line-too-long,logging-fstring-interpolation, import-outside-toplevel
+
+# Standard Import
 import logging
 import logging.handlers
-import os
 import sys
-from typing import Dict, Any
 from pathlib import Path
 
+# Third Party Imports
+
+# First Party Imports
 from config.settings import LoggingConfig
+
+# Local Imports
+
+
+
+
+class ColoredFormatter(logging.Formatter):
+    """Custom formatter that adds color codes to log levels"""
+    
+    # ANSI color codes
+    COLORS = {
+        'DEBUG': '\033[36m',    # Cyan
+        'INFO': '\033[32m',     # Green
+        'WARNING': '\033[33m',  # Yellow
+        'ERROR': '\033[31m',    # Red
+        'CRITICAL': '\033[35m', # Magenta
+    }
+    RESET = '\033[0m'  # Reset to default color
+    
+    def format(self, record):
+        # Get the original formatted message
+        formatted = super().format(record)
+        
+        # Only add colors if we're outputting to a terminal (not when redirected to file)
+        if hasattr(sys.stderr, 'isatty') and sys.stderr.isatty():
+            level_name = record.levelname
+            if level_name in self.COLORS:
+                # Color the entire message
+                formatted = f"{self.COLORS[level_name]}{formatted}{self.RESET}"
+        
+        return formatted
 
 
 class UnicodeConsoleHandler(logging.StreamHandler):
-    """Console handler that safely handles Unicode characters on Windows"""
+    """Console handler that safely handles Unicode characters on Windows with color support"""
 
     def emit(self, record):
         try:
@@ -30,16 +65,16 @@ class UnicodeConsoleHandler(logging.StreamHandler):
 
     def _sanitize_unicode(self, text: str) -> str:
         """Replace Unicode characters with ASCII equivalents"""
-        # Map problematic Unicode characters to ASCII equivalents
+        # Map problematic Unicode characters to ASCII equivalents with color-friendly alternatives
         unicode_map = {
-            "✅": "[OK]",  # Check mark
-            "❌": "[FAIL]",  # Cross mark
-            "⚠️": "[WARN]",  # Warning sign
-            "📊": "[DATA]",  # Chart
-            "🔄": "[SYNC]",  # Arrows
-            "💰": "[MONEY]",  # Money bag
-            "📈": "[UP]",  # Trending up
-            "📉": "[DOWN]",  # Trending down
+            "✅": "✓",      # Check mark (simpler Unicode)
+            "❌": "✗",      # Cross mark (simpler Unicode)
+            "⚠️": "!",      # Warning sign
+            "📊": "[DATA]", # Chart
+            "🔄": "↻",      # Arrows (simpler Unicode)
+            "💰": "$",      # Money bag
+            "📈": "↗",      # Trending up
+            "📉": "↘",      # Trending down
         }
 
         for unicode_char, ascii_replacement in unicode_map.items():
@@ -50,7 +85,7 @@ class UnicodeConsoleHandler(logging.StreamHandler):
 
 def setup_logging(config: LoggingConfig) -> logging.Logger:
     """
-    Setup enhanced logging with Unicode support for Windows
+    Setup enhanced logging with Unicode support for Windows and color coding
 
     Args:
         config: Logging configuration
@@ -70,10 +105,13 @@ def setup_logging(config: LoggingConfig) -> logging.Logger:
     # Clear existing handlers
     root_logger.handlers.clear()
 
-    # Create formatter
-    formatter = logging.Formatter(config.format)
+    # Create colored formatter for console
+    colored_formatter = ColoredFormatter(config.format)
+    
+    # Create regular formatter for file (no colors in files)
+    file_formatter = logging.Formatter(config.format)
 
-    # Console handler with Unicode support
+    # Console handler with Unicode support and color
     if sys.platform.startswith("win"):
         # Use custom Unicode handler for Windows
         console_handler = UnicodeConsoleHandler()
@@ -82,10 +120,10 @@ def setup_logging(config: LoggingConfig) -> logging.Logger:
         console_handler = logging.StreamHandler()
 
     console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(formatter)
+    console_handler.setFormatter(colored_formatter)  # Use colored formatter for console
     root_logger.addHandler(console_handler)
 
-    # File handler with UTF-8 encoding
+    # File handler with UTF-8 encoding (no colors)
     try:
         file_handler = logging.handlers.RotatingFileHandler(
             config.file_path,
@@ -94,7 +132,7 @@ def setup_logging(config: LoggingConfig) -> logging.Logger:
             encoding="utf-8",  # Explicitly use UTF-8 for file logging
         )
         file_handler.setLevel(getattr(logging, config.level.upper(), logging.DEBUG))
-        file_handler.setFormatter(formatter)
+        file_handler.setFormatter(file_formatter)  # Use regular formatter for file
         root_logger.addHandler(file_handler)
     except Exception as e:
         # Fallback to console logging if file handler fails
