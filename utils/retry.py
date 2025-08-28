@@ -7,11 +7,11 @@ Retry logic with exponential backoff for Robinhood Crypto Trading App
 # pylint:disable=broad-exception-caught,logging-fstring-interpolation,missing-module-docstring
 
 import time
-import logging
+from utils.logger import get_logger
 from typing import Callable, Any, Type, Tuple
 from functools import wraps
 
-logger = logging.getLogger("robinhood_crypto_app.retry")
+logger = get_logger("robinhood_crypto_app.retry")
 
 
 def retry_with_backoff(

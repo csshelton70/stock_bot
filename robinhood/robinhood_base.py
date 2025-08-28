@@ -15,7 +15,7 @@ Version: 1.0.0
 import base64
 import datetime
 import json
-import logging
+from utils.logger import get_logger
 from typing import Any, Dict, Optional
 
 import requests
@@ -82,7 +82,7 @@ class RobinhoodBaseClient:
 
     def _setup_logging(self) -> None:
         """Setup logging configuration."""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.logger.setLevel(getattr(logging, self.config.log_level.upper()))
 
         if not self.logger.handlers:

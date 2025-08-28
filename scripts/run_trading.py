@@ -10,7 +10,8 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-def main()->int:
+
+def main() -> int:
     """Main entry point for trading system"""
 
     from apps import TradingSystemApp
@@ -21,5 +22,5 @@ def main()->int:
 
 
 if __name__ == "__main__":
-    exit_code:int = main()
+    exit_code: int = main()
     sys.exit(exit_code)

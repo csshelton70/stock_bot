@@ -6,7 +6,7 @@ ENHANCED: Improved validation, error handling, and duplicate prevention support
 
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, List
-import logging
+from utils.logger import get_logger
 from datetime import datetime
 
 from database import DatabaseManager
@@ -22,7 +22,7 @@ class BaseCollector(ABC):
     def __init__(self, db_manager: DatabaseManager, retry_config: RetryConfig):
         self.db_manager = db_manager
         self.retry_config = retry_config
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = get_logger(f"collectors.{self.__class__.__name__.lower()}") 
         self.collection_start_time = None
         self.collection_stats = {}
 

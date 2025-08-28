@@ -3,16 +3,16 @@
 Improved Database Operations for Robinhood Crypto Trading App
 Enhanced with Trading System operations and better error handling
 """
-#pylint:disable=broad-exception-caught,logging-fstring-interpolation
+# pylint:disable=broad-exception-caught,logging-fstring-interpolation
 
-import logging
+from utils.logger import get_logger
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 import json
 
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy import and_,  func
+from sqlalchemy import and_, func
 
 
 from database.models import (
@@ -27,7 +27,7 @@ from database.models import (
     SignalPerformance,
 )
 
-logger = logging.getLogger("database_operations")
+logger = get_logger("database_operations")
 
 
 class DatabaseOperations:

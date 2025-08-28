@@ -5,14 +5,14 @@ Database connection management for Robinhood Crypto Trading App
 
 # pylint:disable=broad-exception-caught,logging-fstring-interpolation,missing-module-docstring
 
-import logging
+from utils.logger import get_logger
 from typing import Union
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import StaticPool
 from database.models import Base
 
-logger = logging.getLogger("robinhood_crypto_app.database")
+logger = get_logger("robinhood_crypto_app.database")
 
 
 class DatabaseManager:

@@ -25,7 +25,9 @@ class AlertRepository(BaseRepository[AlertStates]):
     def get_active_alerts(self, symbol: Optional[str] = None) -> List[AlertStates]:
         """Get all active alerts, optionally filtered by symbol"""
         with self.get_session() as session:
-            query = session.query(AlertStates).filter(AlertStates.status == "active") #type:ignore
+            query = session.query(AlertStates).filter(
+                AlertStates.status == "active"
+            )  # type:ignore
 
             if symbol:
                 query = query.filter(AlertStates.symbol == symbol)
@@ -36,7 +38,7 @@ class AlertRepository(BaseRepository[AlertStates]):
         """Expire alerts created before cutoff time"""
         with self.get_session() as session:
             expired = (
-                session.query(AlertStates)  #type:ignore
+                session.query(AlertStates)  # type:ignore
                 .filter(
                     and_(
                         AlertStates.status == "active",
@@ -54,7 +56,7 @@ class AlertRepository(BaseRepository[AlertStates]):
 
         with self.get_session() as session:
             return (
-                session.query(AlertStates) #type:ignore
+                session.query(AlertStates)  # type:ignore
                 .filter(
                     and_(
                         AlertStates.symbol == symbol,
@@ -76,7 +78,9 @@ class AlertRepository(BaseRepository[AlertStates]):
         cutoff_time = datetime.utcnow() - timedelta(hours=hours)
 
         with self.get_session() as session:
-            query = session.query(SystemLog).filter(SystemLog.timestamp >= cutoff_time)  #type:ignore
+            query = session.query(SystemLog).filter(
+                SystemLog.timestamp >= cutoff_time
+            )  # type:ignore
 
             if symbol:
                 query = query.filter(SystemLog.symbol == symbol)

@@ -11,9 +11,10 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+
 def main() -> int:
     """Main entry point for data collection"""
-    from apps import DataCollectorApp 
+    from apps import DataCollectorApp
 
     app = DataCollectorApp()
     f_exit_code = app.run()
@@ -21,5 +22,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    exit_code:int = main()
+    exit_code: int = main()
     sys.exit(exit_code)

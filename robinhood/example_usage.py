@@ -19,7 +19,7 @@ Version: 1.0.0
 
 import os
 import sys
-import logging
+from utils.logger import get_logger
 import json
 from pathlib import Path
 

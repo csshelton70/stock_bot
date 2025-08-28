@@ -19,6 +19,8 @@ from sqlalchemy import (
     CheckConstraint,
 )
 from sqlalchemy.ext.declarative import declarative_base
+from utils.logger import get_logger
+logger = get_logger(__name__)
 
 Base = declarative_base()
 
@@ -563,18 +565,14 @@ class SignalPerformance(BaseModel):
 
 
 def get_monitored_crypto_symbols(session) -> list:
-    """Get list of symbols marked as monitored"""
     try:
         return [
             crypto.symbol
             for crypto in session.query(Crypto).filter(Crypto.monitored == True).all()
         ]
     except Exception as e:
-        import logging
-
-        logging.getLogger(__name__).error(f"Error getting monitored symbols: {e}")
+        logger.error(f"Error getting monitored symbols: {e}")  # ✅ FIXED
         return []
-
 
 def get_active_alerts_for_symbol(session, symbol: str) -> list:
     """Get active alerts for a specific symbol"""
@@ -585,9 +583,9 @@ def get_active_alerts_for_symbol(session, symbol: str) -> list:
             .all()
         )
     except Exception as e:
-        import logging
+        from utils.logger import get_logger
 
-        logging.getLogger(__name__).error(f"Error getting alerts for {symbol}: {e}")
+        get_logger(__name__).error(f"Error getting alerts for {symbol}: {e}")
         return []
 
 
@@ -603,9 +601,9 @@ def get_recent_system_events(session, hours: int = 24, limit: int = 100) -> list
             .all()
         )
     except Exception as e:
-        import logging
+        from utils.logger import get_logger
 
-        logging.getLogger(__name__).error(f"Error getting recent events: {e}")
+        get_logger(__name__).error(f"Error getting recent events: {e}")
         return []
 
 
@@ -632,9 +630,9 @@ def cleanup_expired_alerts(session, timeout_hours: int = 12) -> int:
 
         return count
     except Exception as e:
-        import logging
+        from utils.logger import get_logger
 
-        logging.getLogger(__name__).error(f"Error cleaning up expired alerts: {e}")
+        get_logger(__name__).error(f"Error cleaning up expired alerts: {e}")
         return 0
 
 
@@ -706,11 +704,9 @@ def validate_historical_data_integrity(session) -> Dict[str, Any]:
         return validation_results
 
     except Exception as e:
-        import logging
+        from utils.logger import get_logger
 
-        logging.getLogger(__name__).error(
-            f"Error validating historical data integrity: {e}"
-        )
+        get_logger(__name__).error(f"Error validating historical data integrity: {e}")
         return {
             "error": str(e),
             "total_records": 0,
@@ -825,9 +821,9 @@ def get_data_coverage_report(session) -> Dict[str, Any]:
         return coverage_report
 
     except Exception as e:
-        import logging
+        from utils.logger import get_logger
 
-        logging.getLogger(__name__).error(f"Error generating coverage report: {e}")
+        get_logger(__name__).error(f"Error generating coverage report: {e}")
         return {"error": str(e)}
 
 
@@ -871,9 +867,9 @@ def create_missing_indexes(session) -> List[str]:
                 session.execute(text(index_def["sql"]))
                 created_indexes.append(index_def["name"])
             except Exception as e:
-                import logging
+                from utils.logger import get_logger
 
-                logging.getLogger(__name__).debug(
+                get_logger(__name__).debug(
                     f"Index {index_def['name']} might already exist: {e}"
                 )
 
@@ -883,9 +879,9 @@ def create_missing_indexes(session) -> List[str]:
         return created_indexes
 
     except Exception as e:
-        import logging
+        from utils.logger import get_logger
 
-        logging.getLogger(__name__).error(f"Error creating indexes: {e}")
+        get_logger(__name__).error(f"Error creating indexes: {e}")
         return []
 
 
@@ -1012,9 +1008,9 @@ def verify_database_constraints(session) -> Dict[str, Any]:
         return verification_results
 
     except Exception as e:
-        import logging
+        from utils.logger import get_logger
 
-        logging.getLogger(__name__).error(f"Error verifying database constraints: {e}")
+        get_logger(__name__).error(f"Error verifying database constraints: {e}")
         return {
             "error": str(e),
             "constraints_tested": 0,
