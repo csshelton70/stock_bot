@@ -9,7 +9,6 @@ import time
 import requests
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, timedelta
-import logging
 from sqlalchemy import and_
 
 
@@ -21,6 +20,8 @@ from data.repositories.crypto_repository import CryptoRepository
 from utils.retry import RetryConfig
 from database import DatabaseSession
 
+from utils.logger import get_logger
+logger = get_logger(__name__)  
 
 class HistoricalCollector(BaseCollector):
     """

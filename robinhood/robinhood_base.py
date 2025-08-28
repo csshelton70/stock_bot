@@ -15,6 +15,7 @@ Version: 1.0.0
 import base64
 import datetime
 import json
+import logging
 from utils.logger import get_logger
 from typing import Any, Dict, Optional
 
@@ -81,17 +82,11 @@ class RobinhoodBaseClient:
         self.logger.info("RobinhoodBaseClient initialized successfully")
 
     def _setup_logging(self) -> None:
-        """Setup logging configuration."""
-        self.logger = get_logger(__name__)
-        self.logger.setLevel(getattr(logging, self.config.log_level.upper()))
-
-        if not self.logger.handlers:
-            handler = logging.StreamHandler()
-            formatter = logging.Formatter(
-                "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-            )
-            handler.setFormatter(formatter)
-            self.logger.addHandler(handler)
+        # Setup logging configuration using centralized system
+        self.logger = get_logger("robinhood.api_client")
+        self.logger.debug("Robinhood API client logger initialized")
+        # That's it! No need to create additional handlers
+        # The centralized logging system already handles everything
 
     def _create_session(self) -> requests.Session:
         """

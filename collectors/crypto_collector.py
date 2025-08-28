@@ -12,6 +12,9 @@ from data.repositories.crypto_repository import CryptoRepository
 from utils.retry import RetryConfig
 from robinhood import RobinhoodCryptoAPI
 
+from utils.logger import get_logger
+logger = get_logger(__name__)  
+
 
 class CryptoCollector(BaseCollector):
     """Fixed crypto collector using repository pattern"""

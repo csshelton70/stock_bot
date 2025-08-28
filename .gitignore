@@ -58,3 +58,5 @@ crypto_trading.db*
 old/
 .venv/
 backup_old_architecture/
+*.backup
+

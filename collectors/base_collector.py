@@ -6,11 +6,13 @@ ENHANCED: Improved validation, error handling, and duplicate prevention support
 
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, List
-from utils.logger import get_logger
 from datetime import datetime
 
 from database import DatabaseManager
 from utils import RetryConfig, retry_with_backoff
+
+from utils.logger import get_logger
+logger = get_logger(__name__)  
 
 
 class BaseCollector(ABC):

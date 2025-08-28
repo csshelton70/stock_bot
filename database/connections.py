@@ -12,7 +12,7 @@ from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import StaticPool
 from database.models import Base
 
-logger = get_logger("robinhood_crypto_app.database")
+logger = get_logger(__name__)
 
 
 class DatabaseManager:

@@ -11,7 +11,7 @@ from utils.logger import get_logger
 from typing import Callable, Any, Type, Tuple
 from functools import wraps
 
-logger = get_logger("robinhood_crypto_app.retry")
+logger = get_logger("crypto_app.retry")
 
 
 def retry_with_backoff(

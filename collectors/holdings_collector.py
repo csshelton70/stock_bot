@@ -13,6 +13,9 @@ from utils.retry import RetryConfig
 from robinhood import RobinhoodCryptoAPI
 from database import DatabaseSession
 
+from utils.logger import get_logger
+logger = get_logger(__name__)  
+
 
 class HoldingsCollector(BaseCollector):
     """Fixed holdings collector with proper session management"""

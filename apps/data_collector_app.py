@@ -9,7 +9,9 @@ from collectors.account_collector import AccountCollector
 from collectors.holdings_collector import HoldingsCollector
 from collectors.historical_collector import HistoricalCollector
 import sys
+from utils.logger import get_logger
 
+logger = get_logger(__name__)
 
 class DataCollectorApp(BaseApplication):
     """Data collection app with safe Unicode handling"""
@@ -18,6 +20,7 @@ class DataCollectorApp(BaseApplication):
         super().__init__(*args, **kwargs)
         # Define platform-safe status indicators
         self.status_indicators = self._get_status_indicators()
+        self.logger = get_logger(f"component.{self.__class__.__name__.lower()}")
 
     def _get_status_indicators(self) -> dict:
         """Get platform-appropriate status indicators"""

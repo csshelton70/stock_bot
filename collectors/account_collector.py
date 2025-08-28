@@ -12,6 +12,8 @@ from database.models import Account
 from utils.retry import RetryConfig
 from robinhood import RobinhoodCryptoAPI
 
+from utils.logger import get_logger
+logger = get_logger(__name__)  
 
 class AccountCollector(BaseCollector):
     """Refactored account collector using repository pattern"""
