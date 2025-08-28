@@ -9,7 +9,7 @@ from sqlalchemy import desc, and_, func, or_
 from datetime import datetime, timedelta
 
 from .base_repository import BaseRepository
-from database.models import Historical
+from data import Historical
 
 
 class HistoricalRepository(BaseRepository[Historical]):

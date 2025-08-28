@@ -12,7 +12,7 @@ from datetime import datetime
 # Third Party Imports
 
 # First Party Imports
-from database.models import Crypto
+from data import Crypto
 
 # Local Imports
 from .base_repository import BaseRepository

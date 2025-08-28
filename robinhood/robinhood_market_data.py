@@ -113,88 +113,98 @@ class MarketDataClient(RobinhoodBaseClient):
             >>>     print(f"Failed symbols: {prices['failed_symbols']}")
         """
         from .robinhood_error import RobinhoodValidationError
-        
+
         # Handle input normalization
         if symbols is None:
             # Get all symbols - make request without symbol filter
             path = "/api/v1/crypto/marketdata/best_bid_ask/"
             return self.make_request("GET", path)
-        
+
         # Normalize symbols to list
         if isinstance(symbols, str):
             symbol_list = [symbols]
         else:
             symbol_list = list(symbols)
-        
+
         if not symbol_list:
             return {"results": [], "failed_symbols": []}
-        
+
         # Try batch request first (more efficient)
         try:
             symbol_params = [f"symbol={symbol.upper()}" for symbol in symbol_list]
             query_params = "?" + "&".join(symbol_params)
             path = f"/api/v1/crypto/marketdata/best_bid_ask/{query_params}"
-            
+
             response = self.make_request("GET", path)
             # If batch request succeeds, return as-is
             return response
-            
+
         except RobinhoodValidationError as e:
             # 400 error - likely one or more invalid symbols
             self.logger.warning(
                 f"Batch request failed with validation error (status: {e.status_code}), "
                 f"retrying {len(symbol_list)} symbols individually: {e}",
-                exc_info=False
+                exc_info=False,
             )
-            
+
             # Fall through to individual symbol processing
-            
+
         except Exception as e:
             # Other errors should still be raised
-            self.logger.error(f"Batch request failed with unexpected error: {e}", exc_info=True)
+            self.logger.error(
+                f"Batch request failed with unexpected error: {e}", exc_info=True
+            )
             raise
-        
+
         # Process symbols individually
-        self.logger.info(f"Processing {len(symbol_list)} symbols individually for best bid/ask")
-        
+        self.logger.info(
+            f"Processing {len(symbol_list)} symbols individually for best bid/ask"
+        )
+
         successful_results = []
         failed_symbols = []
-        
+
         for symbol in symbol_list:
             try:
                 symbol_upper = symbol.upper()
                 path = f"/api/v1/crypto/marketdata/best_bid_ask/?symbol={symbol_upper}"
-                
-                self.logger.debug(f"Getting best bid/ask for individual symbol: {symbol_upper}")
+
+                self.logger.debug(
+                    f"Getting best bid/ask for individual symbol: {symbol_upper}"
+                )
                 response = self.make_request("GET", path)
-                
+
                 # Add results from this symbol
                 symbol_results = response.get("results", [])
                 if symbol_results:
                     successful_results.extend(symbol_results)
                     self.logger.debug(f"Successfully got bid/ask for {symbol_upper}")
                 else:
-                    self.logger.warning(f"No price data returned for symbol: {symbol_upper}")
+                    self.logger.warning(
+                        f"No price data returned for symbol: {symbol_upper}"
+                    )
                     failed_symbols.append(symbol)
-                    
+
             except RobinhoodValidationError as e:
                 # 400 error for this specific symbol - log warning and continue
                 self.logger.warning(
                     f"Symbol not found or invalid: {symbol} (status: {e.status_code}) - {e.message}",
-                    exc_info=False
+                    exc_info=False,
                 )
                 failed_symbols.append(symbol)
                 continue
-                
+
             except Exception as e:
                 # Other errors for individual symbols
-                self.logger.error(f"Failed to get bid/ask for {symbol}: {e}", exc_info=True)
+                self.logger.error(
+                    f"Failed to get bid/ask for {symbol}: {e}", exc_info=True
+                )
                 failed_symbols.append(symbol)
                 continue
-        
+
         # Prepare response
         response_data = {"results": successful_results}
-        
+
         if failed_symbols:
             response_data["failed_symbols"] = failed_symbols
             self.logger.warning(
@@ -202,29 +212,31 @@ class MarketDataClient(RobinhoodBaseClient):
                 f"{len(failed_symbols)} failed symbols: {failed_symbols}"
             )
         else:
-            self.logger.info(f"Successfully got bid/ask for all {len(successful_results)} symbols")
-        
-        return response_data
+            self.logger.info(
+                f"Successfully got bid/ask for all {len(successful_results)} symbols"
+            )
 
+        return response_data
 
     # Additional helper method for safer symbol validation
     def get_best_bid_ask_safe(
-        self, symbols: Optional[Union[str, Sequence[str]]] = None, 
-        validate_symbols: bool = True
+        self,
+        symbols: Optional[Union[str, Sequence[str]]] = None,
+        validate_symbols: bool = True,
     ) -> Dict[str, Any]:
         """
         Get best bid and ask prices with optional symbol validation.
-        
+
         This is a safer wrapper around get_best_bid_ask that can optionally
         validate symbols before making the request.
-        
+
         Args:
             symbols: Symbol or sequence of symbols
             validate_symbols: If True, validates symbols using get_trading_pairs first
-            
+
         Returns:
             Dict[str, Any]: Best bid/ask prices with validation info
-            
+
         Example:
             >>> # Validate symbols first, then get prices
             >>> prices = client.get_best_bid_ask_safe(["BTC-USD", "FAKE-USD"], validate_symbols=True)
@@ -233,25 +245,33 @@ class MarketDataClient(RobinhoodBaseClient):
         """
         if symbols is None or not validate_symbols:
             return self.get_best_bid_ask(symbols)
-        
+
         # Normalize to list
         if isinstance(symbols, str):
             symbol_list = [symbols]
         else:
             symbol_list = list(symbols)
-        
-        self.logger.debug(f"Validating {len(symbol_list)} symbols before getting bid/ask")
-        
+
+        self.logger.debug(
+            f"Validating {len(symbol_list)} symbols before getting bid/ask"
+        )
+
         # Validate symbols first by checking trading pairs
         try:
             trading_pairs_response = self.get_trading_pairs(symbol_list)
             valid_trading_pairs = trading_pairs_response.get("results", [])
             valid_symbols = [pair["symbol"] for pair in valid_trading_pairs]
-            invalid_symbols = [sym for sym in symbol_list if sym.upper() not in [vs.upper() for vs in valid_symbols]]
-            
+            invalid_symbols = [
+                sym
+                for sym in symbol_list
+                if sym.upper() not in [vs.upper() for vs in valid_symbols]
+            ]
+
             if invalid_symbols:
-                self.logger.warning(f"Invalid symbols detected during validation: {invalid_symbols}")
-            
+                self.logger.warning(
+                    f"Invalid symbols detected during validation: {invalid_symbols}"
+                )
+
             if valid_symbols:
                 # Get prices for valid symbols only
                 prices_response = self.get_best_bid_ask(valid_symbols)
@@ -261,16 +281,17 @@ class MarketDataClient(RobinhoodBaseClient):
             else:
                 self.logger.warning("No valid symbols found after validation")
                 return {
-                    "results": [], 
-                    "validated_symbols": [], 
-                    "invalid_symbols": invalid_symbols
+                    "results": [],
+                    "validated_symbols": [],
+                    "invalid_symbols": invalid_symbols,
                 }
-                
+
         except Exception as e:
-            self.logger.warning(f"Symbol validation failed, proceeding with original request: {e}")
+            self.logger.warning(
+                f"Symbol validation failed, proceeding with original request: {e}"
+            )
             # Fallback to original method if validation fails
             return self.get_best_bid_ask(symbol_list)
-
 
     def get_estimated_price(
         self,

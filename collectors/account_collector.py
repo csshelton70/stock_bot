@@ -7,13 +7,15 @@ from typing import Dict, Any
 from datetime import datetime
 
 from .base_collector import BaseCollector
-from database.connections import DatabaseManager
-from database.models import Account
+from data.connections.database_session import DatabaseManager
+from data import Account
 from utils.retry import RetryConfig
 from robinhood import RobinhoodCryptoAPI
-
+from data import DatabaseSession
 from utils.logger import get_logger
-logger = get_logger(__name__)  
+
+logger = get_logger(__name__)
+
 
 class AccountCollector(BaseCollector):
     """Refactored account collector using repository pattern"""
@@ -51,7 +53,7 @@ class AccountCollector(BaseCollector):
                 return False
 
             # Store using repository pattern
-            from database import DatabaseSession
+
 
             with DatabaseSession(self.db_manager) as db_session:
                 # Check if account exists

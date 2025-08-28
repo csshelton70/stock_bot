@@ -13,6 +13,7 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+
 class DataCollectorApp(BaseApplication):
     """Data collection app with safe Unicode handling"""
 

@@ -13,15 +13,17 @@ from sqlalchemy import and_
 
 
 from .base_collector import BaseCollector
-from database.connections import DatabaseManager
-from database.models import Historical, Crypto
+from data.connections.database_session import DatabaseManager
+from data import Historical, Crypto
 from data.repositories.historical_repository import HistoricalRepository
 from data.repositories.crypto_repository import CryptoRepository
 from utils.retry import RetryConfig
-from database import DatabaseSession
+from data import DatabaseSession
 
 from utils.logger import get_logger
-logger = get_logger(__name__)  
+
+logger = get_logger(__name__)
+
 
 class HistoricalCollector(BaseCollector):
     """

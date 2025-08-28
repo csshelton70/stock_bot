@@ -7,7 +7,8 @@ from typing import Dict, Any, Callable, TypeVar, Type, Union
 import threading
 
 from utils.logger import get_logger
-logger = get_logger(__name__)  
+
+logger = get_logger(__name__)
 
 T = TypeVar("T")
 

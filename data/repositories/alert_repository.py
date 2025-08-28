@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from typing import List, Optional
 from sqlalchemy import desc, and_
 
-from database.models import AlertStates, SystemLog
+from data import AlertStates, SystemLog
 
 from .base_repository import BaseRepository
 

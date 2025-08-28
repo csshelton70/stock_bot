@@ -6,15 +6,16 @@ from typing import List, Dict, Any
 from datetime import datetime
 
 from .base_collector import BaseCollector
-from database.connections import DatabaseManager
-from database.models import Holdings, Account
+from data.connections.database_session import DatabaseManager
+from data import Holdings, Account
 from data.repositories.crypto_repository import CryptoRepository
 from utils.retry import RetryConfig
 from robinhood import RobinhoodCryptoAPI
-from database import DatabaseSession
+from data import DatabaseSession
 
 from utils.logger import get_logger
-logger = get_logger(__name__)  
+
+logger = get_logger(__name__)
 
 
 class HoldingsCollector(BaseCollector):

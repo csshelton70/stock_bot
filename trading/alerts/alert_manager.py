@@ -10,7 +10,7 @@ from enum import Enum
 import logging
 
 from data.repositories.alert_repository import AlertRepository
-from database.models import AlertStates, SystemLog
+from data import AlertStates, SystemLog
 
 
 class AlertType(Enum):

@@ -8,11 +8,12 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 
-from database import DatabaseManager
+from data import DatabaseManager
 from utils import RetryConfig, retry_with_backoff
 
 from utils.logger import get_logger
-logger = get_logger(__name__)  
+
+logger = get_logger(__name__)
 
 
 class BaseCollector(ABC):
@@ -24,7 +25,7 @@ class BaseCollector(ABC):
     def __init__(self, db_manager: DatabaseManager, retry_config: RetryConfig):
         self.db_manager = db_manager
         self.retry_config = retry_config
-        self.logger = get_logger(f"collectors.{self.__class__.__name__.lower()}") 
+        self.logger = get_logger(f"collectors.{self.__class__.__name__.lower()}")
         self.collection_start_time = None
         self.collection_stats = {}
 

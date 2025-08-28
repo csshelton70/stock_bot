@@ -14,7 +14,7 @@ from abc import ABC
 from typing import List, Optional, TypeVar, Generic, Type, Any
 from sqlalchemy.exc import SQLAlchemyError
 
-from database.connections import DatabaseManager
+from data.connections.database_session import DatabaseManager
 
 T = TypeVar("T")
 

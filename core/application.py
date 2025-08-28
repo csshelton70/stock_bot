@@ -114,7 +114,7 @@ class BaseApplication(ABC):
 
     def _register_dependencies(self, container: DIContainer, config: AppConfig) -> None:
         """Register common dependencies - FIXED VERSION"""
-        from database.connections import DatabaseManager
+        from data.connections.database_session import DatabaseManager
         from data.repositories.crypto_repository import CryptoRepository
 
         # Database Manager - direct instance
